@@ -1,0 +1,207 @@
+{
+
+  "Dhcp4": {
+
+    "interfaces-config": {
+      "interfaces": [ "*" ],
+      "dhcp-socket-type": "raw"
+    },
+
+    "lease-database": {
+      "type": "memfile",
+      "persist": true,
+      "name": "/kea/leases/dhcp4.csv",
+      "lfc-interval": 3600
+    },
+
+    "expired-leases-processing": {
+      "reclaim-timer-wait-time": 10,
+      "flush-reclaimed-timer-wait-time": 25,
+      "hold-reclaimed-time": 3600,
+      "max-reclaim-leases": 100,
+      "max-reclaim-time": 250,
+      "unwarned-reclaim-cycles": 5
+    },
+
+    "multi-threading": {
+      "enable-multi-threading": true,
+      "thread-pool-size": 4,
+      "packet-queue-size": 28
+    },
+
+    "parked-packet-limit": 128,
+    "valid-lifetime": 2592000,
+    "renew-timer": 648000,
+    "rebind-timer": 1296000,
+      
+    "control-sockets": [{
+        "socket-type": "unix",
+        "socket-name": "/kea/sockets/dhcp4.socket"
+      },
+      {
+        "socket-type": "https",
+         "socket-address": "0.0.0.0",
+         "socket-port": 8000,
+        "http-headers": [
+          {
+              "name": "Strict-Transport-Security",
+              "value": "max-age=31536000"
+            }
+      ],
+      "trust-anchor": "/kea/certs/ca.pem",
+      "cert-file": "/kea/certs/server.pem",
+      "key-file": "/kea/certs/server.pem",
+      "cert-required": true
+       }
+    ],
+
+    "hooks-libraries": [
+         {
+             "library": "libdhcp_subnet_cmds.so"
+         },
+         {
+             "library": "libdhcp_lease_cmds.so"
+         },
+         {
+             "library": "libdhcp_class_cmds.so"
+         }
+    ],
+
+    "loggers": [
+      {
+        "name": "kea-dhcp4",
+        "output_options": [
+          {
+            "output": "stdout",
+            "pattern": "%D{%Y-%m-%d %H:%M:%S.%q} %-5p [%c/%i.%t] %m\n"
+          },
+          {
+            "output": "/kea/logs/dhcp4.log",
+            "flush": true,
+            "maxsize": 1048576,
+            "maxver": 8,
+            "pattern": "%D{%Y-%m-%d %H:%M:%S.%q} %-5p [%c/%i.%t] %m\n"
+          }
+        ],
+        "severity": "INFO",
+        "debuglevel": 0
+      }
+    ],
+
+    "option-data": [
+      {
+        "name": "domain-name-servers",
+        "data": "10.246.196.76, 10.245.248.76"
+      },
+      {
+        "code": 15,
+        "data": "vitistack.io"
+      },
+      {
+        "name": "domain-search",
+        "data": "mydomain.vitistack.io, vitistack.io"
+      },
+      {
+        "name": "boot-file-name",
+        "data": "EST5EDT4\\,M3.2.0/02:00\\,M11.1.0/02:00"
+      },
+      {
+        "name": "default-ip-ttl",
+        "data": "0xf0"
+      }
+    ],
+
+   "client-classes": [
+      {
+        "name": "ipxeclients",
+        "test": "option[175].exists",
+        "option-data": [
+          {
+            "name": "boot-file-name",
+            "data": "http://10.204.128.70:8081/boot.ipxe"
+          }
+        ]
+      },
+      {
+        "name": "ueficlients",
+        "test": "option[93].hex == 0x0007 and not option[175].exists",
+        "option-data": [
+          {
+            "name": "tftp-server-name",
+            "data": "10.204.128.70"
+          },
+          {
+            "name": "boot-file-name",
+            "data": "ipxe.efi"
+          }
+        ],
+        "next-server": "10.204.128.70"
+      },
+      {
+        "name": "biosclients",
+        "test": "option[93].hex == 0x0000 and not option[175].exists",
+        "option-data": [
+          {
+            "name": "tftp-server-name",
+            "data": "10.204.128.70"
+          },
+          {
+            "name": "boot-file-name",
+            "data": "undionly.kpxe"
+          }
+        ],
+        "next-server": "10.204.128.70"
+      }
+    ],
+
+    "subnet4": [
+      {
+        "id": 1,
+        "subnet": "100.64.0.0/24",
+        "pools": [
+          {
+            "pool": "100.64.0.4 - 100.64.0.254",
+            "require-client-classes": [
+              "biosclients",
+              "ueficlients",
+              "ipxeclients"
+            ]
+          }
+        ],
+        "option-data": [
+          {
+            "name": "routers",
+            "data": "100.64.0.1"
+          }
+        ],
+        "reservations": [
+          {
+            "hw-address": "bc:24:11:84:5e:fa",
+            "ip-address": "100.64.0.4"
+          },
+          {
+            "hw-address": "bc:24:11:ae:fd:de",
+            "ip-address": "100.64.0.33"
+          },
+          {
+            "hw-address": "bc:24:11:96:cc:da",
+            "ip-address": "100.64.0.53"
+          },
+          {
+            "hw-address": "f4:03:43:ea:d5:20",
+            "ip-address": "100.64.0.84"
+          },
+          {
+            "hw-address": "f4:03:43:ea:eb:10",
+            "ip-address": "100.64.0.97"
+          },
+          {
+            "hw-address": "f4:03:43:ea:c6:f0",
+            "ip-address": "100.64.0.122"
+          }
+        ]
+      }
+    ]
+
+  }
+}

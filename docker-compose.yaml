@@ -1,0 +1,26 @@
+services:
+  dhcp4:
+    image: jonasal/kea-dhcp4:3.1.1-alpine
+    restart: unless-stopped
+    ports:
+      - 8000:8000
+    networks:
+      - kea-dhcp
+    command: -c /kea/config/dhcp4.json
+    volumes:
+      - ./hack/docker/config:/kea/config
+      - ./hack/docker/sockets:/kea/sockets
+      - ./hack/docker/leases:/kea/leases
+      - ./hack/docker/logs:/kea/logs
+      - ./hack/docker/certs:/kea/certs
+
+volumes:
+  sockets:
+  leases:
+
+networks:
+  kea-dhcp:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.231.0/24

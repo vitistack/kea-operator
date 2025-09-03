@@ -15,10 +15,9 @@ Kea DHCP Operator provides automated management and orchestration for [Kea DHCP]
 ## 📦 Features
 
 - Automated deployment of Kea DHCP
-- Dynamic configuration management
-- Lease tracking and reporting
+- Pre-configured DHCP scope with options for PXE boot
 - TLS certificate support
-- Easy integration with Kubernetes and Docker
+- Easy integration with Kubernetes and Docker for testing out REST-API
 
 ---
 
@@ -27,6 +26,7 @@ Kea DHCP Operator provides automated management and orchestration for [Kea DHCP]
 ```bash
 git clone https://github.com/vitistack/kea-operator.git
 cd kea-operator
+chmod 750 ./hack/docker/sockets
 docker-compose up -d
 ```
 

@@ -32,7 +32,7 @@ go.work.sum
 # .vscode/
 
 # Kea DHCP Directories
-hack/docker/certs
-hack/docker/leases
-hack/docker/sockets
-hack/docker/logs
+hack/docker/certs/*
+hack/docker/leases/*
+hack/docker/sockets/*
+hack/docker/logs/*

@@ -65,7 +65,7 @@
          {
              "library": "libdhcp_class_cmds.so"
          },
-         {
+         { 
              "library": "libdhcp_host_cmds.so"
          }
     ],

@@ -1,210 +1,410 @@
 {
-
   "Dhcp4": {
-
-    "interfaces-config": {
-      "interfaces": [ "*" ],
-      "dhcp-socket-type": "raw"
+    "allocator": "iterative",
+    "authoritative": false,
+    "boot-file-name": "",
+    "cache-threshold": 0.25,
+    "calculate-tee-times": false,
+    "client-classes": [
+      {
+        "boot-file-name": "",
+        "name": "ipxeclients",
+        "next-server": "0.0.0.0",
+        "option-data": [
+          {
+            "always-send": false,
+            "code": 67,
+            "csv-format": true,
+            "data": "http://10.204.128.70:8081/boot.ipxe",
+            "name": "boot-file-name",
+            "never-send": false,
+            "space": "dhcp4"
+          }
+        ],
+        "option-def": [ ],
+        "server-hostname": "",
+        "test": "option[175].exists"
+      },
+      {
+        "boot-file-name": "",
+        "name": "ueficlients",
+        "next-server": "10.204.128.70",
+        "option-data": [
+          {
+            "always-send": false,
+            "code": 66,
+            "csv-format": true,
+            "data": "10.204.128.70",
+            "name": "tftp-server-name",
+            "never-send": false,
+            "space": "dhcp4"
+          },
+          {
+            "always-send": false,
+            "code": 67,
+            "csv-format": true,
+            "data": "ipxe.efi",
+            "name": "boot-file-name",
+            "never-send": false,
+            "space": "dhcp4"
+          }
+        ],
+        "option-def": [ ],
+        "server-hostname": "",
+        "test": "option[93].hex == 0x0007 and not option[175].exists"
+      },
+      {
+        "boot-file-name": "",
+        "name": "biosclients",
+        "next-server": "10.204.128.70",
+        "option-data": [
+          {
+            "always-send": false,
+            "code": 66,
+            "csv-format": true,
+            "data": "10.204.128.70",
+            "name": "tftp-server-name",
+            "never-send": false,
+            "space": "dhcp4"
+          },
+          {
+            "always-send": false,
+            "code": 67,
+            "csv-format": true,
+            "data": "undionly.kpxe",
+            "name": "boot-file-name",
+            "never-send": false,
+            "space": "dhcp4"
+          }
+        ],
+        "option-def": [ ],
+        "server-hostname": "",
+        "test": "option[93].hex == 0x0000 and not option[175].exists"
+      }
+    ],
+    "control-sockets": [
+      {
+        "socket-name": "/kea/sockets/dhcp4.socket",
+        "socket-type": "unix"
+      },
+      {
+        "cert-file": "/kea/certs/server.pem",
+        "cert-required": true,
+        "http-headers": [
+          {
+            "name": "Strict-Transport-Security",
+            "value": "max-age=31536000"
+          }
+        ],
+        "key-file": "/kea/certs/server.pem",
+        "socket-address": "0.0.0.0",
+        "socket-port": 8000,
+        "socket-type": "https",
+        "trust-anchor": "/kea/certs/ca.pem"
+      }
+    ],
+    "ddns-conflict-resolution-mode": "check-with-dhcid",
+    "ddns-generated-prefix": "myhost",
+    "ddns-override-client-update": false,
+    "ddns-override-no-update": false,
+    "ddns-qualifying-suffix": "",
+    "ddns-replace-client-name": "never",
+    "ddns-send-updates": true,
+    "ddns-update-on-renew": false,
+    "decline-probation-period": 86400,
+    "dhcp-ddns": {
+      "enable-updates": false,
+      "max-queue-size": 1024,
+      "ncr-format": "JSON",
+      "ncr-protocol": "UDP",
+      "sender-ip": "0.0.0.0",
+      "sender-port": 0,
+      "server-ip": "127.0.0.1",
+      "server-port": 53001
     },
-
-    "lease-database": {
-      "type": "memfile",
-      "persist": true,
-      "name": "/kea/leases/dhcp4.csv",
-      "lfc-interval": 3600
+    "dhcp-queue-control": {
+      "capacity": 64,
+      "enable-queue": false,
+      "queue-type": "kea-ring4"
     },
-
+    "dhcp4o6-port": 0,
+    "early-global-reservations-lookup": false,
+    "echo-client-id": true,
     "expired-leases-processing": {
-      "reclaim-timer-wait-time": 10,
       "flush-reclaimed-timer-wait-time": 25,
       "hold-reclaimed-time": 3600,
       "max-reclaim-leases": 100,
       "max-reclaim-time": 250,
+      "reclaim-timer-wait-time": 10,
       "unwarned-reclaim-cycles": 5
     },
-
-    "multi-threading": {
-      "enable-multi-threading": true,
-      "thread-pool-size": 4,
-      "packet-queue-size": 28
-    },
-
-    "parked-packet-limit": 128,
-    "valid-lifetime": 2592000,
-    "renew-timer": 648000,
-    "rebind-timer": 1296000,
-      
-    "control-sockets": [{
-        "socket-type": "unix",
-        "socket-name": "/kea/sockets/dhcp4.socket"
+    "hooks-libraries": [
+      {
+        "library": "libdhcp_subnet_cmds.so"
       },
       {
-        "socket-type": "https",
-         "socket-address": "0.0.0.0",
-         "socket-port": 8000,
-        "http-headers": [
-          {
-              "name": "Strict-Transport-Security",
-              "value": "max-age=31536000"
-            }
-      ],
-      "trust-anchor": "/kea/certs/ca.pem",
-      "cert-file": "/kea/certs/server.pem",
-      "key-file": "/kea/certs/server.pem",
-      "cert-required": true
-       }
+        "library": "libdhcp_lease_cmds.so"
+      },
+      {
+        "library": "libdhcp_class_cmds.so"
+      },
+      {
+        "library": "libdhcp_host_cmds.so"
+      }
     ],
-
-    "hooks-libraries": [
-         {
-             "library": "libdhcp_subnet_cmds.so"
-         },
-         {
-             "library": "libdhcp_lease_cmds.so"
-         },
-         {
-             "library": "libdhcp_class_cmds.so"
-         },
-         { 
-             "library": "libdhcp_host_cmds.so"
-         }
-    ],
-
+    "host-reservation-identifiers": [ "hw-address", "duid", "circuit-id", "client-id" ],
+    "hostname-char-replacement": "",
+    "hostname-char-set": "[^A-Za-z0-9.-]",
+    "interfaces-config": {
+      "interfaces": [ "*" ],
+      "re-detect": true
+    },
+    "ip-reservations-unique": true,
+    "lease-database": {
+      "lfc-interval": 3600,
+      "name": "/kea/leases/dhcp4.csv",
+      "persist": true,
+      "type": "memfile"
+    },
     "loggers": [
       {
+        "debuglevel": 0,
         "name": "kea-dhcp4",
-        "output_options": [
+        "output-options": [
           {
+            "flush": true,
             "output": "stdout",
             "pattern": "%D{%Y-%m-%d %H:%M:%S.%q} %-5p [%c/%i.%t] %m\n"
           },
           {
-            "output": "/kea/logs/dhcp4.log",
             "flush": true,
             "maxsize": 1048576,
             "maxver": 8,
+            "output": "/kea/logs/dhcp4.log",
             "pattern": "%D{%Y-%m-%d %H:%M:%S.%q} %-5p [%c/%i.%t] %m\n"
           }
         ],
-        "severity": "INFO",
-        "debuglevel": 0
+        "severity": "INFO"
       }
     ],
-
+    "match-client-id": true,
+    "multi-threading": {
+      "enable-multi-threading": true,
+      "packet-queue-size": 28,
+      "thread-pool-size": 4
+    },
+    "next-server": "0.0.0.0",
     "option-data": [
       {
+        "always-send": false,
+        "code": 6,
+        "csv-format": true,
+        "data": "10.246.196.76, 10.245.248.76",
         "name": "domain-name-servers",
-        "data": "10.246.196.76, 10.245.248.76"
+        "never-send": false,
+        "space": "dhcp4"
       },
       {
+        "always-send": false,
         "code": 15,
-        "data": "vitistack.io"
+        "csv-format": true,
+        "data": "vitistack.io",
+        "name": "domain-name",
+        "never-send": false,
+        "space": "dhcp4"
       },
       {
+        "always-send": false,
+        "code": 119,
+        "csv-format": true,
+        "data": "mydomain.vitistack.io, vitistack.io",
         "name": "domain-search",
-        "data": "mydomain.vitistack.io, vitistack.io"
+        "never-send": false,
+        "space": "dhcp4"
       },
       {
+        "always-send": false,
+        "code": 67,
+        "csv-format": true,
+        "data": "EST5EDT4\\,M3.2.0/02:00\\,M11.1.0/02:00",
         "name": "boot-file-name",
-        "data": "EST5EDT4\\,M3.2.0/02:00\\,M11.1.0/02:00"
+        "never-send": false,
+        "space": "dhcp4"
       },
       {
+        "always-send": false,
+        "code": 23,
+        "csv-format": true,
+        "data": "0xf0",
         "name": "default-ip-ttl",
-        "data": "0xf0"
+        "never-send": false,
+        "space": "dhcp4"
       }
     ],
-
-   "client-classes": [
-      {
-        "name": "ipxeclients",
-        "test": "option[175].exists",
-        "option-data": [
-          {
-            "name": "boot-file-name",
-            "data": "http://10.204.128.70:8081/boot.ipxe"
-          }
-        ]
-      },
-      {
-        "name": "ueficlients",
-        "test": "option[93].hex == 0x0007 and not option[175].exists",
-        "option-data": [
-          {
-            "name": "tftp-server-name",
-            "data": "10.204.128.70"
-          },
-          {
-            "name": "boot-file-name",
-            "data": "ipxe.efi"
-          }
-        ],
-        "next-server": "10.204.128.70"
-      },
-      {
-        "name": "biosclients",
-        "test": "option[93].hex == 0x0000 and not option[175].exists",
-        "option-data": [
-          {
-            "name": "tftp-server-name",
-            "data": "10.204.128.70"
-          },
-          {
-            "name": "boot-file-name",
-            "data": "undionly.kpxe"
-          }
-        ],
-        "next-server": "10.204.128.70"
-      }
-    ],
-
+    "option-def": [ ],
+    "parked-packet-limit": 128,
+    "rebind-timer": 1296000,
+    "renew-timer": 648000,
+    "reservations-global": false,
+    "reservations-in-subnet": true,
+    "reservations-lookup-first": false,
+    "reservations-out-of-pool": false,
+    "sanity-checks": {
+      "extended-info-checks": "fix",
+      "lease-checks": "warn"
+    },
+    "server-hostname": "",
+    "server-tag": "",
+    "shared-networks": [ ],
+    "stash-agent-options": false,
+    "statistic-default-sample-age": 0,
+    "statistic-default-sample-count": 20,
+    "store-extended-info": false,
     "subnet4": [
       {
+        "4o6-interface": "",
+        "4o6-interface-id": "",
+        "4o6-subnet": "",
+        "allocator": "iterative",
+        "cache-threshold": 0.25,
+        "calculate-tee-times": false,
         "id": 1,
-        "subnet": "100.64.0.0/24",
-        "pools": [
-          {
-            "pool": "100.64.0.4 - 100.64.0.254",
-            "require-client-classes": [
-              "biosclients",
-              "ueficlients",
-              "ipxeclients"
-            ]
-          }
-        ],
+        "max-valid-lifetime": 2592000,
+        "min-valid-lifetime": 2592000,
         "option-data": [
           {
+            "always-send": false,
+            "code": 3,
+            "csv-format": true,
+            "data": "100.64.0.1",
             "name": "routers",
-            "data": "100.64.0.1"
+            "never-send": false,
+            "space": "dhcp4"
           }
         ],
+        "pools": [
+          {
+            "evaluate-additional-classes": [ "biosclients", "ueficlients", "ipxeclients" ],
+            "option-data": [ ],
+            "pool": "100.64.0.4-100.64.0.254"
+          }
+        ],
+        "rebind-timer": 1296000,
+        "relay": {
+          "ip-addresses": [ ]
+        },
+        "renew-timer": 648000,
         "reservations": [
           {
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
             "hw-address": "bc:24:11:84:5e:fa",
-            "ip-address": "100.64.0.4"
+            "ip-address": "100.64.0.4",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
           },
           {
-            "hw-address": "bc:24:11:ae:fd:de",
-            "ip-address": "100.64.0.33"
-          },
-          {
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
             "hw-address": "bc:24:11:96:cc:da",
-            "ip-address": "100.64.0.53"
+            "ip-address": "100.64.0.53",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
           },
           {
-            "hw-address": "f4:03:43:ea:d5:20",
-            "ip-address": "100.64.0.84"
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
+            "hw-address": "bc:24:11:ae:fd:de",
+            "ip-address": "100.64.0.33",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
           },
           {
-            "hw-address": "f4:03:43:ea:eb:10",
-            "ip-address": "100.64.0.97"
-          },
-          {
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
             "hw-address": "f4:03:43:ea:c6:f0",
-            "ip-address": "100.64.0.122"
+            "ip-address": "100.64.0.122",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
+          },
+          {
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
+            "hw-address": "f4:03:43:ea:d5:20",
+            "ip-address": "100.64.0.84",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
+          },
+          {
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
+            "hw-address": "f4:03:43:ea:eb:10",
+            "ip-address": "100.64.0.97",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
           }
-        ]
+        ],
+        "store-extended-info": false,
+        "subnet": "100.64.0.0/24",
+        "t1-percent": 0.5,
+        "t2-percent": 0.875,
+        "valid-lifetime": 2592000
+      },
+      {
+        "4o6-interface": "",
+        "4o6-interface-id": "",
+        "4o6-subnet": "",
+        "allocator": "iterative",
+        "cache-threshold": 0.25,
+        "calculate-tee-times": false,
+        "id": 2,
+        "max-valid-lifetime": 2592000,
+        "min-valid-lifetime": 2592000,
+        "option-data": [
+          {
+            "always-send": false,
+            "code": 3,
+            "csv-format": true,
+            "data": "100.64.1.1",
+            "name": "routers",
+            "never-send": false,
+            "space": "dhcp4"
+          }
+        ],
+        "pools": [
+          {
+            "evaluate-additional-classes": [ "biosclients", "ueficlients", "ipxeclients" ],
+            "option-data": [ ],
+            "pool": "100.64.1.4-100.64.1.254"
+          }
+        ],
+        "rebind-timer": 1296000,
+        "relay": {
+          "ip-addresses": [ ]
+        },
+        "renew-timer": 648000,
+        "reservations": [ ],
+        "store-extended-info": false,
+        "subnet": "100.64.1.0/24",
+        "t1-percent": 0.5,
+        "t2-percent": 0.875,
+        "valid-lifetime": 2592000
       }
-    ]
-
+    ],
+    "t1-percent": 0.5,
+    "t2-percent": 0.875,
+    "valid-lifetime": 2592000
   }
 }

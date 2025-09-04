@@ -1,0 +1,9 @@
+POST https://localhost:8000/
+Content-Type: application/json
+cert: hack/docker/certs/client.crt
+key: hack/docker/certs/client.key
+ca: hack/docker/certs/ca.crt
+
+{
+    "command": "config-write"
+}

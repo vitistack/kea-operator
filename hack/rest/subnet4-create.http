@@ -9,7 +9,21 @@ ca: hack/docker/certs/ca.crt
   "arguments": {
      "subnet4": [{
         "id": 2,
-        "subnet": "100.64.1.0/24"
-      }]
-  }
+        "subnet": "100.64.1.0/24",
+        "pools": [
+        {
+          "pool": "100.64.1.4 - 100.64.1.254",
+          "require-client-classes": [
+            "biosclients",
+            "ueficlients",
+            "ipxeclients"
+          ]
+        }],
+        "option-data": [
+          {
+            "name": "routers",
+            "data": "100.64.1.1"
+          }],
+     }],
+  },
 }

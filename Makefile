@@ -243,6 +243,10 @@ setup-envtest: envtest ## Download the binaries required for ENVTEST in the loca
 		exit 1; \
 	}
 
+.PHONY: test-setup
+test-setup: setup-envtest ## Alias for setup-envtest (for GitHub Actions compatibility)
+	@echo "Test environment setup complete"
+
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
 $(ENVTEST): $(LOCALBIN)

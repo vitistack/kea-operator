@@ -1,0 +1,17 @@
+{
+  "versionlens.http.strictSSL": false,
+  "rest-client.certificates": {
+    "localhost:8000": {
+      "cert": "hack/docker/certs/client.crt",
+      "key": "hack/docker/certs/client.key",
+      "ca": "hack/docker/certs/ca.crt",
+      "rejectUnauthorized": false
+    }
+  },
+  "rest-client.defaultHeaders": {
+    "User-Agent": "REST Client"
+  },
+  "rest-client.enableTelemetry": false,
+  "rest-client.followredirect": true,
+  "rest-client.timeoutinmilliseconds": 0
+}

@@ -1,0 +1,14 @@
+POST https://localhost:8000/
+Content-Type: application/json
+cert: hack/docker/certs/client.crt
+key: hack/docker/certs/client.key
+ca: hack/docker/certs/ca.crt
+
+{
+    "command": "lease4-add",
+    "arguments": {
+        "ip-address": "100.64.0.100",
+        "hw-address": "1a:1b:1c:1d:1e:1f",
+        "subnet-id": 1
+    }
+}

@@ -4,6 +4,8 @@ cert: hack/docker/certs/client.crt
 key: hack/docker/certs/client.key
 ca: hack/docker/certs/ca.crt
 
+// Write the current configuration to disk
+
 {
     "command": "config-write"
 }

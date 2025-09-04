@@ -4,9 +4,9 @@ cert: hack/docker/certs/client.crt
 key: hack/docker/certs/client.key
 ca: hack/docker/certs/ca.crt
 
+// To list all available IPv4 subnets, use the subnet4-list command.
+
 {
-  "command": "subnet4-get", 
-  "arguments": {
-    "id": 1
-  }
+  "command": "subnet4-list", 
+  "arguments": {}
 }

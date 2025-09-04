@@ -4,7 +4,11 @@ cert: hack/docker/certs/client.crt
 key: hack/docker/certs/client.key
 ca: hack/docker/certs/ca.crt
 
+// To retrieve detailed information about the subnet, use the subnet4-get command with the subnet ID.
+
 {
-  "command": "subnet4-list", 
-  "arguments": {}
+  "command": "subnet4-get", 
+  "arguments": {
+    "id": 1
+  }
 }

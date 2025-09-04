@@ -4,29 +4,27 @@ cert: hack/docker/certs/client.crt
 key: hack/docker/certs/client.key
 ca: hack/docker/certs/ca.crt
 
-    {
-      "command": "config-set",
-      "arguments": {
-        "Dhcp4": {
-          "subnet4": [
-            {
-              "id": 1,
-              "subnet": "192.0.2.0/24",
-              "pools": [
+{
+    "command": "subnet4-add",
+    "arguments": {
+        "subnet4": [ {
+            "id": 2,
+            "subnet": "100.64.1.0/24",
+            "option-data": [
+                { "name": "routers",
+                  "data": "100.64.1.1"
+               }
+            ],
+            "pools": [
                 {
-                  "pool": "192.0.2.1 - 192.0.2.200"
+                  "pool": "100.64.1.4-100.64.1.254",
+                  "require-client-classes": [
+                  "biosclients",
+                  "ueficlients",
+                  "ipxeclients"
+                  ]
                 }
-              ],
-              "option-data": [
-                {
-                  "name": "domain-name-servers",
-                  "space": "dhcp4",
-                  "data": "192.0.3.1,192.0.3.2"
-                }
-              ]
-            }
-            // Add other subnets if necessary
-          ]
-        }
-      }
+            ]
+        } ]
     }
+}

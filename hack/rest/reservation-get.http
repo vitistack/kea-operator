@@ -1,0 +1,26 @@
+POST https://localhost:8000/
+Content-Type: application/json
+cert: hack/docker/certs/client.crt
+key: hack/docker/certs/client.key
+ca: hack/docker/certs/ca.crt
+
+// Get reservation by mac-address
+
+{
+    "command": "reservation-get",
+    "arguments": {
+        "subnet-id": 1,
+        "identifier-type": "hw-address",
+        "identifier": "f4:03:43:ea:eb:10"
+    }
+}
+
+// Get reservation by ip-address
+
+# {
+#     "command": "reservation-get",
+#     "arguments": {
+#         "subnet-id": 1,
+#         "ip-address": "100.64.0.97"
+#     }
+# }

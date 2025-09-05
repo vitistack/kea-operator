@@ -299,6 +299,16 @@
             "boot-file-name": "",
             "client-classes": [ ],
             "hostname": "",
+            "hw-address": "1a:1b:1c:1d:1e:1f",
+            "ip-address": "100.64.0.91",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
+          },
+          {
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
             "hw-address": "bc:24:11:84:5e:fa",
             "ip-address": "100.64.0.4",
             "next-server": "0.0.0.0",
@@ -398,6 +408,46 @@
         "reservations": [ ],
         "store-extended-info": false,
         "subnet": "100.64.1.0/24",
+        "t1-percent": 0.5,
+        "t2-percent": 0.875,
+        "valid-lifetime": 2592000
+      },
+      {
+        "4o6-interface": "",
+        "4o6-interface-id": "",
+        "4o6-subnet": "",
+        "allocator": "iterative",
+        "cache-threshold": 0.25,
+        "calculate-tee-times": false,
+        "id": 100642550,
+        "max-valid-lifetime": 2592000,
+        "min-valid-lifetime": 2592000,
+        "option-data": [
+          {
+            "always-send": false,
+            "code": 3,
+            "csv-format": true,
+            "data": "100.64.3.1",
+            "name": "routers",
+            "never-send": false,
+            "space": "dhcp4"
+          }
+        ],
+        "pools": [
+          {
+            "evaluate-additional-classes": [ "biosclients", "ueficlients", "ipxeclients" ],
+            "option-data": [ ],
+            "pool": "100.64.3.4-100.64.3.254"
+          }
+        ],
+        "rebind-timer": 1296000,
+        "relay": {
+          "ip-addresses": [ ]
+        },
+        "renew-timer": 648000,
+        "reservations": [ ],
+        "store-extended-info": false,
+        "subnet": "100.64.3.0/24",
         "t1-percent": 0.5,
         "t2-percent": 0.875,
         "valid-lifetime": 2592000

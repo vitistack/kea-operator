@@ -1,0 +1,18 @@
+POST https://localhost:8000/
+Content-Type: application/json
+cert: hack/docker/certs/client.crt
+key: hack/docker/certs/client.key
+ca: hack/docker/certs/ca.crt
+
+// Get reservation by ip address
+// As reservation-add is expected to store the host, the hosts-databases parameter must be specified in the configuration, 
+// and databases must not run in read-only mode.
+
+{
+    "command": "reservation-get-by-address",
+    "arguments": {
+        "ip-address": "100.64.0.97",
+        "subnet-id": 1
+    }
+}
+

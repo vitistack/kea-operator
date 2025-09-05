@@ -4,12 +4,12 @@ cert: hack/docker/certs/client.crt
 key: hack/docker/certs/client.key
 ca: hack/docker/certs/ca.crt
 
-// Get lease by hardware address
+// Get reservation by hardware address
 
 {
-    "command": "lease4-get-by-hw-address",
+    "command": "reservation-get-by-id",
     "arguments": {
-        "hw-address": "1a:1b:1c:1d:1e:1f",
-        "subnet-id": 1
-    }
-}
+        "identifier-type": "hw-address",
+        "identifier": "f4:03:43:ea:eb:10"
+     }
+ }

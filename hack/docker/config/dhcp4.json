@@ -309,6 +309,15 @@
             "boot-file-name": "",
             "client-classes": [ ],
             "hostname": "",
+            "hw-address": "1a:1b:1c:1d:1e:2f",
+            "next-server": "0.0.0.0",
+            "option-data": [ ],
+            "server-hostname": ""
+          },
+          {
+            "boot-file-name": "",
+            "client-classes": [ ],
+            "hostname": "",
             "hw-address": "bc:24:11:84:5e:fa",
             "ip-address": "100.64.0.4",
             "next-server": "0.0.0.0",

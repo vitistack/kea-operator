@@ -1,0 +1,25 @@
+POST https://localhost:8000/
+Content-Type: application/json
+cert: hack/docker/certs/client.crt
+key: hack/docker/certs/client.key
+ca: hack/docker/certs/ca.crt
+
+// Add a reservation to subnet
+// The operation-target parameter accepts the following values:
+// * memory - query or update the runtime server configuration
+// * database - query or update host database(s)
+// * all - query or update both runtime configuration and host database(s)
+// * default - query or update a default host data source - it is command-specific
+
+
+// Delete reservation by mac address
+
+{
+    "command": "reservation-del",
+    "arguments": {
+        "subnet-id": 1,
+        "identifier-type": "hw-address",
+        "identifier": "bc:24:11:96:cc:da",
+        "operation-target": "all"
+    }
+}

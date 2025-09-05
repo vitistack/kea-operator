@@ -1,0 +1,25 @@
+POST https://localhost:8000/
+Content-Type: application/json
+cert: hack/docker/certs/client.crt
+key: hack/docker/certs/client.key
+ca: hack/docker/certs/ca.crt
+
+// Add a reservation to subnet
+// The operation-target parameter accepts the following values:
+// * memory - query or update the runtime server configuration
+// * database - query or update host database(s)
+// * all - query or update both runtime configuration and host database(s)
+// * default - query or update a default host data source - it is command-specific
+
+// Make reservation without specifying IP address, let server assign it! Please verify behavior in your environment!
+
+{
+    "command": "reservation-add",
+    "arguments": {
+        "reservation": {
+            "subnet-id": 1,
+            "hw-address": "1a:1b:1c:1d:1e:2f"
+        },
+        "operation-target": "all"
+    }
+}

@@ -7,18 +7,18 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"os"
 
-	"github.com/spf13/viper"
 	"github.com/vitistack/common/pkg/loggers/vlog"
-	"github.com/vitistack/common/pkg/serialize"
-	"github.com/vitistack/kea-operator/internal/consts"
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 )
 
@@ -28,12 +28,19 @@ type keaClient struct {
 	Port       string
 	HttpClient *http.Client
 
+	lastConfigHash string // simple hash to avoid rebuilding transport when unchanged
+
 	// TLS options
 	CACertPath         string
 	ClientCertPath     string
 	ClientKeyPath      string
 	InsecureSkipVerify bool
 	ServerName         string
+
+	// Direct PEM data (takes precedence over file paths if provided)
+	CACertPEM     []byte
+	ClientCertPEM []byte
+	ClientKeyPEM  []byte
 
 	Timeout time.Duration
 }
@@ -78,16 +85,22 @@ func (kc *keaClient) applyDefaults() {
 }
 
 func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.Response, error) {
-	// Ensure HTTP client is built with TLS if configured
+	// Ensure HTTP client is built (lazy) if config changed
 	c.buildHTTPClient()
-
 	base, err := c.buildBaseURL()
 	if err != nil {
 		return keamodels.Response{}, err
 	}
-	keaCommand := serialize.JSON(cmd)
-	body, _ := json.Marshal(keamodels.Request{Command: keaCommand})
-	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/", bytes.NewReader(body))
+
+	// Marshal the request exactly as provided (no double-encoding of command field)
+	body, err := json.Marshal(cmd)
+	if err != nil {
+		return keamodels.Response{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", base+"/", bytes.NewReader(body))
+	if err != nil {
+		return keamodels.Response{}, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HttpClient.Do(req)
 	if err != nil {
@@ -99,16 +112,31 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 		}
 	}()
 
-	var out struct {
-		Responses []keamodels.Response `json:"responses"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return keamodels.Response{}, err
 	}
-	if len(out.Responses) == 0 {
-		return keamodels.Response{}, errors.New("empty response")
+
+	// 1. Try plain array response: [ { result, text, ... } ]
+	var arr []keamodels.Response
+	if err := json.Unmarshal(data, &arr); err == nil && len(arr) > 0 {
+		return arr[0], nil
 	}
-	return out.Responses[0], nil
+	// 2. Try wrapped object: { "responses": [ ... ] }
+	var wrapped struct {
+		Responses []keamodels.Response `json:"responses"`
+	}
+	if err := json.Unmarshal(data, &wrapped); err == nil && len(wrapped.Responses) > 0 {
+		return wrapped.Responses[0], nil
+	}
+	// 3. Try single object
+	var single keamodels.Response
+	if err := json.Unmarshal(data, &single); err == nil && (single.Text != "" || single.Result != 0) {
+		return single, nil
+	}
+
+	vlog.Warn("unexpected Kea response payload", "body", string(data))
+	return keamodels.Response{}, errors.New("unrecognized Kea response format")
 }
 
 // buildBaseURL constructs a full base URL including scheme and port if needed.
@@ -149,8 +177,23 @@ func (c *keaClient) buildHTTPClient() {
 		c.HttpClient = &http.Client{}
 	}
 
-	tlsNeeded := c.CACertPath != "" ||
-		(c.ClientCertPath != "" && c.ClientKeyPath != "") ||
+	// Compute a lightweight config fingerprint
+	confParts := []string{
+		c.BaseUrl, c.Port,
+		c.CACertPath, c.ClientCertPath, c.ClientKeyPath,
+		c.ServerName,
+		boolToStr(c.InsecureSkipVerify),
+		hashBytes(c.CACertPEM), hashBytes(c.ClientCertPEM), hashBytes(c.ClientKeyPEM),
+	}
+	newHash := strings.Join(confParts, "|")
+	if c.lastConfigHash == newHash && c.HttpClient.Transport != nil {
+		// Only update timeout
+		c.HttpClient.Timeout = c.Timeout
+		return
+	}
+
+	tlsNeeded := c.CACertPath != "" || len(c.CACertPEM) > 0 ||
+		((c.ClientCertPath != "" && c.ClientKeyPath != "") || (len(c.ClientCertPEM) > 0 && len(c.ClientKeyPEM) > 0)) ||
 		c.InsecureSkipVerify ||
 		c.ServerName != ""
 	if !tlsNeeded {
@@ -165,23 +208,92 @@ func (c *keaClient) buildHTTPClient() {
 	if c.ServerName != "" {
 		tlsCfg.ServerName = c.ServerName
 	}
-	if c.CACertPath != "" {
-		caPEM, err := os.ReadFile(c.CACertPath)
-		if err == nil {
+	if len(c.CACertPEM) > 0 {
+		pool := x509.NewCertPool()
+		if pool.AppendCertsFromPEM(c.CACertPEM) {
+			tlsCfg.RootCAs = pool
+		}
+	} else if c.CACertPath != "" {
+		if caPEM, err := os.ReadFile(c.CACertPath); err == nil {
 			pool := x509.NewCertPool()
 			if pool.AppendCertsFromPEM(caPEM) {
 				tlsCfg.RootCAs = pool
+			} else {
+				vlog.Warn("failed to append CA certs from %s", c.CACertPath)
 			}
+		} else {
+			vlog.Warn("failed to read CA cert file %s: %v", c.CACertPath, err)
 		}
 	}
-	if c.ClientCertPath != "" && c.ClientKeyPath != "" {
-		if cert, err := tls.LoadX509KeyPair(c.ClientCertPath, c.ClientKeyPath); err == nil {
+	if len(c.ClientCertPEM) > 0 && len(c.ClientKeyPEM) > 0 {
+		if cert, err := tls.X509KeyPair(c.ClientCertPEM, c.ClientKeyPEM); err == nil {
 			tlsCfg.Certificates = []tls.Certificate{cert}
+		}
+	} else if c.ClientCertPath != "" && c.ClientKeyPath != "" {
+		if cert := c.loadClientCertWithFallback(); cert != nil {
+			tlsCfg.Certificates = []tls.Certificate{*cert}
 		}
 	}
 	transport := &http.Transport{TLSClientConfig: tlsCfg}
 	c.HttpClient.Transport = transport
+	c.lastConfigHash = newHash
 	c.HttpClient.Timeout = c.Timeout
+}
+
+func boolToStr(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+// hashBytes returns a short stable string for a byte slice:
+// length plus first/last 4 bytes (hex) to avoid heavy hashing libraries.
+func hashBytes(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	if len(b) < 8 {
+		return fmt.Sprintf("%d:%x", len(b), b)
+	}
+	return fmt.Sprintf("%d:%x:%x", len(b), b[:4], b[len(b)-4:])
+}
+
+// loadClientCertWithFallback attempts to load the configured client cert/key first;
+// if that fails, it tries conventional fallbacks in the same directory: client.crt/client.key and tls.crt/tls.key.
+// Returns nil if no pair could be loaded.
+func (c *keaClient) loadClientCertWithFallback() *tls.Certificate {
+	pathsTried := [][2]string{{c.ClientCertPath, c.ClientKeyPath}}
+	dir := filepath.Dir(c.ClientCertPath)
+	// Add common alternative names
+	pathsTried = append(pathsTried,
+		[2]string{filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key")},
+		[2]string{filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")},
+	)
+	for _, p := range pathsTried {
+		certPath, keyPath := p[0], p[1]
+		if certPath == "" || keyPath == "" {
+			continue
+		}
+		if _, err := os.Stat(certPath); err != nil {
+			continue
+		}
+		if _, err := os.Stat(keyPath); err != nil {
+			continue
+		}
+		if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
+			if certPath != c.ClientCertPath || keyPath != c.ClientKeyPath {
+				vlog.Info("loaded fallback client certificate", "cert", certPath, "key", keyPath)
+			}
+			return &cert
+		}
+	}
+	vlog.Warn(
+		"no usable client certificate key pair found",
+		"primaryCert", c.ClientCertPath,
+		"primaryKey", c.ClientKeyPath,
+	)
+	return nil
 }
 
 // NewKeaClientFromEnv builds a Kea client using environment variables.
@@ -192,36 +304,8 @@ func (c *keaClient) buildHTTPClient() {
 //	KEA_TLS_INSECURE (true/false)
 //	KEA_TLS_SERVER_NAME
 //	KEA_TIMEOUT_SECONDS (default 10)
+//
+// Deprecated: use NewKeaClientWithOptions(OptionFromEnv()) directly.
 func NewKeaClientFromEnv() *keaClient {
-	// Ensure env is wired into Viper
-	viper.AutomaticEnv()
-	// Bind the exact env var names we expect
-	_ = viper.BindEnv(consts.KEA_BASE_URL)
-	_ = viper.BindEnv(consts.KEA_HOST)
-	_ = viper.BindEnv(consts.KEA_PORT)
-	_ = viper.BindEnv(consts.KEA_TLS_CA_FILE)
-	_ = viper.BindEnv(consts.KEA_TLS_CERT_FILE)
-	_ = viper.BindEnv(consts.KEA_TLS_KEY_FILE)
-	_ = viper.BindEnv(consts.KEA_TLS_INSECURE)
-	_ = viper.BindEnv(consts.KEA_TLS_SERVER_NAME)
-	_ = viper.BindEnv(consts.KEA_TIMEOUT_SECONDS)
-
-	base := viper.GetString(consts.KEA_BASE_URL)
-	host := viper.GetString(consts.KEA_HOST)
-	port := viper.GetString(consts.KEA_PORT)
-	if base == "" && host != "" {
-		base = host
-	}
-	kc := NewKeaClient(base, port)
-	// TLS options
-	kc.CACertPath = viper.GetString(consts.KEA_TLS_CA_FILE)
-	kc.ClientCertPath = viper.GetString(consts.KEA_TLS_CERT_FILE)
-	kc.ClientKeyPath = viper.GetString(consts.KEA_TLS_KEY_FILE)
-	kc.InsecureSkipVerify = viper.GetBool(consts.KEA_TLS_INSECURE)
-	kc.ServerName = viper.GetString(consts.KEA_TLS_SERVER_NAME)
-	if secs := viper.GetInt(consts.KEA_TIMEOUT_SECONDS); secs > 0 {
-		kc.Timeout = time.Duration(secs) * time.Second
-	}
-	kc.buildHTTPClient()
-	return kc
+	return NewKeaClientWithOptions(OptionFromEnv())
 }

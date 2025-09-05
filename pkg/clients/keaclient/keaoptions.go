@@ -4,6 +4,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/spf13/viper"
+	"github.com/vitistack/kea-operator/internal/consts"
+	corev1 "k8s.io/api/core/v1"
 )
 
 type KeaOption interface {
@@ -43,6 +47,32 @@ func OptionPort(port string) KeaOption {
 	})
 }
 
+// OptionURL sets a full URL (scheme://host:port). It parses out host and port and keeps scheme embedded in BaseUrl.
+func OptionURL(fullURL string) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		if fullURL == "" {
+			return
+		}
+		// We just store as-is; buildBaseURL will not prepend scheme if already present.
+		// If user supplies host separately we split host:port later.
+		// Everything before last ':' is treated as the host portion if needed.
+		cfg.BaseUrl = fullURL
+		// Attempt to extract port if present at end
+		// Only if scheme present and host:port provided.
+		// This is optional; buildBaseURL already handles existing port, but storing port allows overrides via OptionPort.
+		parts := strings.Split(fullURL, "://")
+		if len(parts) == 2 {
+			hostPort := parts[1]
+			if slash := strings.Index(hostPort, "/"); slash >= 0 {
+				hostPort = hostPort[:slash]
+			}
+			if hp := strings.Split(hostPort, ":"); len(hp) == 2 {
+				cfg.Port = hp[1]
+			}
+		}
+	})
+}
+
 // TLS and HTTP options
 func OptionTLS(caFile, certFile, keyFile string) KeaOption {
 	return optionFunc(func(cfg *keaClient) {
@@ -69,6 +99,109 @@ func OptionTimeout(d time.Duration) KeaOption {
 		cfg.Timeout = d
 		if cfg.HttpClient != nil {
 			cfg.HttpClient.Timeout = d
+		}
+	})
+}
+
+// OptionFromEnv populates the client configuration from environment variables via Viper.
+// Supported env vars (see consts):
+//
+//	KEA_BASE_URL (or KEA_HOST + optional KEA_PORT)
+//	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
+//	KEA_TLS_INSECURE (true/false)
+//	KEA_TLS_SERVER_NAME
+//	KEA_TIMEOUT_SECONDS
+func OptionFromEnv() KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		viper.AutomaticEnv()
+		// Bind expected variables (ignore bind errors deliberately)
+		_ = viper.BindEnv(consts.KEA_URL)
+		_ = viper.BindEnv(consts.KEA_BASE_URL)
+		_ = viper.BindEnv(consts.KEA_HOST)
+		_ = viper.BindEnv(consts.KEA_PORT)
+		_ = viper.BindEnv(consts.KEA_TLS_ENABLED)
+		_ = viper.BindEnv(consts.KEA_TLS_CA_FILE)
+		_ = viper.BindEnv(consts.KEA_TLS_CERT_FILE)
+		_ = viper.BindEnv(consts.KEA_TLS_KEY_FILE)
+		_ = viper.BindEnv(consts.KEA_TLS_INSECURE)
+		_ = viper.BindEnv(consts.KEA_TLS_SERVER_NAME)
+		_ = viper.BindEnv(consts.KEA_TIMEOUT_SECONDS)
+
+		full := viper.GetString(consts.KEA_URL)
+		base := viper.GetString(consts.KEA_BASE_URL)
+		host := viper.GetString(consts.KEA_HOST)
+		port := viper.GetString(consts.KEA_PORT)
+		if base == "" && host != "" {
+			base = host
+		}
+		if full != "" {
+			cfg.BaseUrl = full // includes scheme
+		} else if base != "" {
+			cfg.BaseUrl = base
+		}
+		if port != "" {
+			cfg.Port = port
+		}
+		// TLS settings only if enabled (default disabled)
+		tlsEnabled := viper.GetBool(consts.KEA_TLS_ENABLED)
+		if tlsEnabled {
+			if v := viper.GetString(consts.KEA_TLS_CA_FILE); v != "" {
+				cfg.CACertPath = v
+			}
+			if v := viper.GetString(consts.KEA_TLS_CERT_FILE); v != "" {
+				cfg.ClientCertPath = v
+			}
+			if v := viper.GetString(consts.KEA_TLS_KEY_FILE); v != "" {
+				cfg.ClientKeyPath = v
+			}
+			if viper.IsSet(consts.KEA_TLS_INSECURE) {
+				cfg.InsecureSkipVerify = viper.GetBool(consts.KEA_TLS_INSECURE)
+			}
+			if v := viper.GetString(consts.KEA_TLS_SERVER_NAME); v != "" {
+				cfg.ServerName = v
+			}
+		}
+		if secs := viper.GetInt(consts.KEA_TIMEOUT_SECONDS); secs > 0 {
+			cfg.Timeout = time.Duration(secs) * time.Second
+			if cfg.HttpClient != nil {
+				cfg.HttpClient.Timeout = cfg.Timeout
+			}
+		}
+	})
+}
+
+// OptionTLSPEM sets TLS data directly from in-memory PEM bytes (takes precedence over file paths).
+func OptionTLSPEM(caPEM, certPEM, keyPEM []byte) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		if len(caPEM) > 0 {
+			cfg.CACertPEM = caPEM
+		}
+		if len(certPEM) > 0 {
+			cfg.ClientCertPEM = certPEM
+		}
+		if len(keyPEM) > 0 {
+			cfg.ClientKeyPEM = keyPEM
+		}
+	})
+}
+
+// OptionTLSFromSecret populates TLS material from a Kubernetes Secret (type kubernetes.io/tls or generic keys).
+// Expected keys:
+//
+//	ca.crt (optional), tls.crt, tls.key
+func OptionTLSFromSecret(secret *corev1.Secret) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		if secret == nil {
+			return
+		}
+		if ca, ok := secret.Data["ca.crt"]; ok {
+			cfg.CACertPEM = ca
+		}
+		if crt, ok := secret.Data[corev1.TLSCertKey]; ok {
+			cfg.ClientCertPEM = crt
+		}
+		if key, ok := secret.Data[corev1.TLSPrivateKeyKey]; ok {
+			cfg.ClientKeyPEM = key
 		}
 	})
 }

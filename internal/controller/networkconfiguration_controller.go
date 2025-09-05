@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -96,17 +97,19 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// Mark Reconciling
-	_ = r.setCondition(ctx, nc, viticommonconditions.New(
-		conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", nc.GetGeneration(),
-	))
+	// Mark Reconciling only if not already recorded for current generation to avoid status update loop
+	if !hasReadyReconcilingForGeneration(nc, nc.GetGeneration()) {
+		_ = r.setCondition(ctx, nc, viticommonconditions.New(
+			conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", nc.GetGeneration(),
+		))
+	}
 
 	// 2) Fetch the NetworkNamespace in the same namespace to get ipv4_prefix
 	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, req.Namespace)
 	if err != nil {
 		log.Error(err, "failed to get NetworkNamespace ipv4_prefix", "namespace", req.Namespace)
 		// Requeue to retry later
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
 	// 3) Collect MAC addresses from the NetworkConfiguration resource itself
@@ -121,10 +124,16 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	subnetID, err := r.getKeaSubnetID(ctx, ipv4Prefix)
 	if err != nil {
 		log.Error(err, "failed to resolve Kea subnet id", "ipv4Prefix", ipv4Prefix)
+		txt := strings.ToLower(err.Error())
 		_ = r.setCondition(ctx, nc, viticommonconditions.New(
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("resolve subnet: %v", err), nc.GetGeneration(),
 		))
-		return reconcileutil.Requeue(nil)
+		// Do not hot-loop if command unsupported; just return without requeue (will reconcile on next event or resync)
+		if strings.Contains(txt, "unsupported kea command") || strings.Contains(txt, "not supported") {
+			return ctrl.Result{}, nil
+		}
+		// Otherwise requeue (transient error)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
 	// 5) Ensure reservations per MAC in Kea (idempotent)
@@ -139,7 +148,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	_ = r.setCondition(ctx, nc, viticommonconditions.New(
 		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", nc.GetGeneration(),
 	))
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 func NewNetworkConfigurationReconciler(mgr ctrl.Manager, keaClient keainterface.KeaClient) *NetworkConfigurationReconciler {
@@ -330,8 +339,33 @@ func (r *NetworkConfigurationReconciler) setCondition(ctx context.Context, nc *u
 		}
 	}
 
+	// Capture pre-update snapshot to detect changes for the specific condition
+	var prev *metav1.Condition
+	for i := range existing {
+		if existing[i].Type == cond.Type {
+			tmp := existing[i]
+			prev = &tmp
+			break
+		}
+	}
+
 	// Update or add the condition using common helper
 	viticommonconditions.SetOrUpdateCondition(&existing, &cond)
+
+	// Locate updated condition to compare meaningful fields; if unchanged skip patch
+	var cur *metav1.Condition
+	for i := range existing {
+		if existing[i].Type == cond.Type {
+			cur = &existing[i]
+			break
+		}
+	}
+	if prev != nil && cur != nil {
+		// If status, reason, message and observedGeneration are identical, skip patch
+		if prev.Status == cur.Status && prev.Reason == cur.Reason && prev.Message == cur.Message && prev.ObservedGeneration == cur.ObservedGeneration {
+			return nil
+		}
+	}
 
 	// Convert back to unstructured form
 	newSlice := make([]any, 0, len(existing))
@@ -355,6 +389,10 @@ func (r *NetworkConfigurationReconciler) getKeaSubnetID(ctx context.Context, ipv
 		return 0, err
 	}
 	if resp.Result != 0 {
+		// If command unsupported we should not hot-loop endlessly.
+		if strings.Contains(strings.ToLower(resp.Text), "not supported") {
+			return 0, fmt.Errorf("unsupported kea command subnet4-list: %s", resp.Text)
+		}
 		return 0, fmt.Errorf("kea subnet4-list failed: %s", resp.Text)
 	}
 	subnets, ok := resp.Arguments["subnets"].([]any)
@@ -417,4 +455,36 @@ func (r *NetworkConfigurationReconciler) ensureKeaReservationForMAC(ctx context.
 		return fmt.Errorf("kea reservation-add failed: %s", addResp.Text)
 	}
 	return nil
+}
+
+// hasReadyReconcilingForGeneration returns true if the Ready condition already reflects
+// a Reconciling (False/Reconciling) state for the provided generation, preventing redundant status patches.
+func hasReadyReconcilingForGeneration(nc *unstructured.Unstructured, generation int64) bool {
+	conds, found, _ := unstructured.NestedSlice(nc.Object, "status", "conditions")
+	if !found {
+		return false
+	}
+	for _, it := range conds {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		typeStr, _ := m["type"].(string)
+		statusStr, _ := m["status"].(string)
+		reasonStr, _ := m["reason"].(string)
+		// ObservedGeneration may be encoded as float64 in unstructured
+		var obsGen int64
+		switch v := m["observedGeneration"].(type) {
+		case int64:
+			obsGen = v
+		case int32:
+			obsGen = int64(v)
+		case float64:
+			obsGen = int64(v)
+		}
+		if typeStr == conditionTypeReady && statusStr == string(metav1.ConditionFalse) && reasonStr == conditionReasonReconciling && obsGen == generation {
+			return true
+		}
+	}
+	return false
 }

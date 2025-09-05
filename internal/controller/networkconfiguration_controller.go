@@ -33,7 +33,6 @@ import (
 	viticommonconditions "github.com/vitistack/common/pkg/operator/conditions"
 	viticommonfinalizers "github.com/vitistack/common/pkg/operator/finalizers"
 	reconcileutil "github.com/vitistack/common/pkg/operator/reconcileutil"
-	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
 	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 )
@@ -69,35 +68,36 @@ const (
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	log.Info("Reconciling NetworkConfiguration")
 
 	// 1) Fetch the NetworkConfiguration
-	var nc vitistackcrdsv1alpha1.NetworkConfiguration
-	if err := r.Get(ctx, req.NamespacedName, &nc); err != nil {
-		// Ignore not found; the object might be deleted
+	nc := &unstructured.Unstructured{}
+	nc.SetGroupVersionKind(schema.GroupVersionKind{Group: "vitistack.io", Version: "v1alpha1", Kind: "NetworkConfiguration"})
+	if err := r.Get(ctx, req.NamespacedName, nc); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// Ensure finalizer on non-deleted objects
-	if nc.DeletionTimestamp.IsZero() {
-		if !viticommonfinalizers.Has(&nc, finalizerName) {
-			if err := viticommonfinalizers.Ensure(ctx, r.Client, &nc, finalizerName); err != nil {
+	if nc.GetDeletionTimestamp().IsZero() {
+		if !viticommonfinalizers.Has(nc, finalizerName) {
+			if err := viticommonfinalizers.Ensure(ctx, r.Client, nc, finalizerName); err != nil {
 				return reconcileutil.Requeue(err)
 			}
 			return ctrl.Result{}, nil
 		}
 	} else {
 		// Handle deletion: best-effort cleanup then remove finalizer
-		if err := r.cleanupReservations(ctx, &nc); err != nil {
+		if err := r.cleanupReservations(ctx, nc); err != nil {
 			log.Error(err, "cleanup during deletion failed")
 		}
-		if err := viticommonfinalizers.Remove(ctx, r.Client, &nc, finalizerName); err != nil {
+		if err := viticommonfinalizers.Remove(ctx, r.Client, nc, finalizerName); err != nil {
 			return reconcileutil.Requeue(err)
 		}
 		return ctrl.Result{}, nil
 	}
 
 	// Mark Reconciling
-	_ = r.setCondition(ctx, &nc, viticommonconditions.New(
+	_ = r.setCondition(ctx, nc, viticommonconditions.New(
 		conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", nc.GetGeneration(),
 	))
 
@@ -110,9 +110,9 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// 3) Collect MAC addresses from the NetworkConfiguration resource itself
-	macs := extractMACsFromNetworkConfiguration(&nc)
+	macs := extractMACsFromNetworkConfiguration(nc)
 	if len(macs) == 0 {
-		log.Info("no MAC addresses found on NetworkConfiguration; skipping reservation", "name", nc.Name, "namespace", nc.Namespace)
+		log.Info("no MAC addresses found on NetworkConfiguration; skipping reservation", "name", nc.GetName(), "namespace", nc.GetNamespace())
 		// No error; just exit without requeue
 		return ctrl.Result{}, nil
 	}
@@ -121,7 +121,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	subnetID, err := r.getKeaSubnetID(ctx, ipv4Prefix)
 	if err != nil {
 		log.Error(err, "failed to resolve Kea subnet id", "ipv4Prefix", ipv4Prefix)
-		_ = r.setCondition(ctx, &nc, viticommonconditions.New(
+		_ = r.setCondition(ctx, nc, viticommonconditions.New(
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("resolve subnet: %v", err), nc.GetGeneration(),
 		))
 		return reconcileutil.Requeue(nil)
@@ -136,14 +136,22 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Success: set Ready True
-	_ = r.setCondition(ctx, &nc, viticommonconditions.New(
+	_ = r.setCondition(ctx, nc, viticommonconditions.New(
 		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", nc.GetGeneration(),
 	))
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
+func NewNetworkConfigurationReconciler(mgr ctrl.Manager, keaClient keainterface.KeaClient) *NetworkConfigurationReconciler {
+	return &NetworkConfigurationReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		KeaClient: keaClient,
+	}
+}
+
 func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Watch NetworkConfiguration as unstructured to avoid scheme coupling
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "vitistack.io", Version: "v1alpha1", Kind: "NetworkConfiguration"})
 	return ctrl.NewControllerManagedBy(mgr).
@@ -154,15 +162,11 @@ func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) erro
 
 // getIPv4PrefixFromNetworkNamespace returns status.ipv4_prefix from the NetworkNamespace
 func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx context.Context, namespace string) (string, error) {
-	// Try to get a typed NetworkNamespace if available in the CRDs package
-	// Fallback to unstructured list if the name is unknown; take the first in namespace
-	// Use unstructured to avoid tight coupling
+	// Use unstructured to avoid tight coupling if the type isn't available
 	nnList := &unstructured.UnstructuredList{}
-	nnList.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "vitistack.io",
-		Version: "v1alpha1",
-		Kind:    "NetworkNamespace",
-	})
+	// Set the list GVK for vitistack.io/v1alpha1 NetworkNamespace
+	nnList.SetAPIVersion("vitistack.io/v1alpha1")
+	nnList.SetKind("NetworkNamespace")
 	if err := r.List(ctx, nnList, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
@@ -171,7 +175,6 @@ func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx c
 	}
 	// Assume single NetworkNamespace per Kubernetes namespace
 	nn := nnList.Items[0]
-	// status.ipv4_prefix
 	if v, found, _ := unstructured.NestedString(nn.Object, "status", "ipv4_prefix"); found && v != "" {
 		return v, nil
 	}
@@ -180,13 +183,9 @@ func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx c
 
 // extractMACsFromNetworkConfiguration attempts to read MAC addresses from the NetworkConfiguration CR (spec or status).
 // It tries several common field shapes and validates values as MAC addresses.
-func extractMACsFromNetworkConfiguration(nc *vitistackcrdsv1alpha1.NetworkConfiguration) []string {
-	// Convert to unstructured for flexible traversal
-	conv := runtime.DefaultUnstructuredConverter
-	objMap, err := conv.ToUnstructured(nc)
-	if err != nil {
-		return nil
-	}
+func extractMACsFromNetworkConfiguration(nc *unstructured.Unstructured) []string {
+	// Work directly with unstructured for flexible traversal
+	objMap := nc.Object
 
 	// Utility to normalize and validate MACs
 	addMAC := func(dst map[string]struct{}, val string) {
@@ -271,8 +270,9 @@ func extractMACsFromNetworkConfiguration(nc *vitistackcrdsv1alpha1.NetworkConfig
 // Note: legacy lease-based helpers were removed in favor of reservation-based flow.
 
 // cleanupReservations best-effort removal of reservations on delete.
-func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration) error {
-	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, nc.Namespace)
+
+func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, nc *unstructured.Unstructured) error {
+	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, nc.GetNamespace())
 	if err != nil {
 		return err
 	}
@@ -312,9 +312,38 @@ func (r *NetworkConfigurationReconciler) deleteKeaReservationForMAC(ctx context.
 }
 
 // setCondition patches the status with the given condition using common conditions helper.
-func (r *NetworkConfigurationReconciler) setCondition(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration, cond metav1.Condition) error {
+func (r *NetworkConfigurationReconciler) setCondition(ctx context.Context, nc *unstructured.Unstructured, cond metav1.Condition) error {
 	base := nc.DeepCopy()
-	viticommonconditions.SetOrUpdateCondition(&nc.Status.Conditions, &cond)
+
+	// Read existing status.conditions into typed []metav1.Condition
+	var existing []metav1.Condition
+	if slice, found, _ := unstructured.NestedSlice(nc.Object, "status", "conditions"); found {
+		for _, it := range slice {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			var c metav1.Condition
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(m, &c); err == nil {
+				existing = append(existing, c)
+			}
+		}
+	}
+
+	// Update or add the condition using common helper
+	viticommonconditions.SetOrUpdateCondition(&existing, &cond)
+
+	// Convert back to unstructured form
+	newSlice := make([]any, 0, len(existing))
+	for _, c := range existing {
+		m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&c)
+		if err != nil {
+			continue
+		}
+		newSlice = append(newSlice, m)
+	}
+	_ = unstructured.SetNestedSlice(nc.Object, newSlice, "status", "conditions")
+
 	return r.Status().Patch(ctx, nc, client.MergeFrom(base))
 }
 

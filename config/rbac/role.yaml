@@ -30,3 +30,11 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - vitistack.io
+  resources:
+  - networknamespaces
+  verbs:
+  - get
+  - list
+  - watch

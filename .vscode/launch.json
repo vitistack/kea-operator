@@ -11,7 +11,12 @@
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/main.go",
       "debugAdapter": "dlv-dap",
-      "env": {}
+      "env": {
+        "JSON_LOGGING": "false",
+        "LOG_LEVEL": "debug",
+        "KEA_HOST": "localhost", // docker compose starts kea on localhost
+        "KEA_PORT": "8000"
+      }
     }
   ]
 }

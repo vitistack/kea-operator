@@ -38,7 +38,9 @@ import (
 	"github.com/vitistack/common/pkg/loggers/vlog"
 	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
 
+	"github.com/vitistack/kea-operator/internal/clients"
 	"github.com/vitistack/kea-operator/internal/controller"
+	"github.com/vitistack/kea-operator/internal/settings"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -56,6 +58,8 @@ func init() {
 
 // nolint:gocyclo
 func main() {
+	settings.Init()
+
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -92,8 +96,9 @@ func main() {
 		_ = vlog.Sync()
 	}()
 
-	//ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 	ctrl.SetLogger(vlog.Logr())
+
+	clients.InitializeClients()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -186,13 +191,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize external clients and inject into controllers
+	clients.InitializeClients()
+
 	if err := (&controller.NetworkConfigurationReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		KeaClient: clients.KeaClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NetworkConfiguration")
 		os.Exit(1)
 	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

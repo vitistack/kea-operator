@@ -57,8 +57,8 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+manifests: controller-gen ## Generate RBAC manifests only (CRDs are managed externally in vitistack/crds).
+	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./..."
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -134,6 +134,7 @@ update-deps: ## Update dependencies
 
 ##@ Build
 
+
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
@@ -170,8 +171,9 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm test-builder
 	rm Dockerfile.cross
 
+
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer: manifests generate kustomize ## Generate a consolidated YAML with the operator deployment (no CRDs).
 	mkdir -p dist
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build config/default > dist/install.yaml
@@ -183,12 +185,11 @@ ifndef ignore-not-found
 endif
 
 .PHONY: install
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f -
+install: k8s-install-vitistack-crds ## Install VitiStack CRDs from vitistack/crds into the current kube-context.
 
 .PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+uninstall: require-kubectl ## Uninstall VitiStack CRDs applied by k8s-install-vitistack-crds (best-effort). Call with ignore-not-found=true to ignore resource not found errors during deletion.
+	@[ -d $(CRDS_DOWNLOAD_DIR) ] && $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f $(CRDS_DOWNLOAD_DIR) || echo "No downloaded CRDs found in $(CRDS_DOWNLOAD_DIR); skip"
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
@@ -214,6 +215,9 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 GOSEC ?= $(LOCALBIN)/gosec
+# External CLI dependencies
+CURL ?= curl
+JQ ?= jq
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.7.1
@@ -224,6 +228,14 @@ ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 GOLANGCI_LINT_VERSION ?= v2.4.0
 GOSEC_VERSION ?= v2.22.8
+
+## VitiStack CRDs (download/install)
+# Override VITISTACK_CRDS_REF to pin a branch, tag, or commit (default: main)
+VITISTACK_CRDS_REF ?= main
+# GitHub API endpoint to list files under crds/ at a specific ref
+VITISTACK_CRDS_API ?= https://api.github.com/repos/vitistack/crds/contents/crds?ref=$(VITISTACK_CRDS_REF)
+# Local directory where CRDs will be downloaded
+CRDS_DOWNLOAD_DIR ?= hack/vitistack-crds
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -296,3 +308,37 @@ mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $$(realpath $(1)-$(3)) $(1)
 endef
+
+
+##@ VitiStack CRDs
+
+.PHONY: k8s-download-vitistack-crds
+k8s-download-vitistack-crds: require-curl-jq ## Download all VitiStack CRDs from vitistack/crds@$(VITISTACK_CRDS_REF) into $(CRDS_DOWNLOAD_DIR)
+	@echo -e "$(CYAN)Fetching CRD list from$(RESET) $(VITISTACK_CRDS_API)"
+	@mkdir -p $(CRDS_DOWNLOAD_DIR)
+	@$(CURL) -fsSL "$(VITISTACK_CRDS_API)" | $(JQ) -r '.[] | select(.type=="file") | select(.name | test("\\.(ya?ml)$$")) | .download_url' > $(CRDS_DOWNLOAD_DIR)/.crd_urls
+	@if [ ! -s $(CRDS_DOWNLOAD_DIR)/.crd_urls ]; then echo "No CRD files found at ref $(VITISTACK_CRDS_REF)."; exit 1; fi
+	@echo -e "$(CYAN)Downloading CRDs into$(RESET) $(CRDS_DOWNLOAD_DIR)"
+	@while read -r url; do \
+		fname=$$(basename $$url); \
+		echo "- $$fname"; \
+		$(CURL) -fsSL "$$url" -o "$(CRDS_DOWNLOAD_DIR)/$$fname"; \
+	done < $(CRDS_DOWNLOAD_DIR)/.crd_urls
+	@echo -e "$(GREEN)CRDs downloaded to$(RESET) $(CRDS_DOWNLOAD_DIR)"
+
+.PHONY: k8s-install-vitistack-crds
+k8s-install-vitistack-crds: require-kubectl k8s-download-vitistack-crds ## Apply downloaded VitiStack CRDs to the current kube-context
+	@echo -e "$(CYAN)Applying CRDs from$(RESET) $(CRDS_DOWNLOAD_DIR)"
+	@$(KUBECTL) apply -f $(CRDS_DOWNLOAD_DIR)
+	@echo -e "$(GREEN)VitiStack CRDs installed successfully.$(RESET)"
+
+# Dependency checks used by the CRD targets
+.PHONY: require-curl-jq
+require-curl-jq: ## Verify curl and jq are installed
+	@command -v $(CURL) >/dev/null 2>&1 || { echo "Error: $(CURL) is required (e.g., brew install curl)."; exit 1; }
+	@command -v $(JQ) >/dev/null 2>&1 || { echo "Error: $(JQ) is required (e.g., brew install jq)."; exit 1; }
+
+.PHONY: require-kubectl
+require-kubectl: ## Verify kubectl is installed
+	@command -v $(KUBECTL) >/dev/null 2>&1 || { echo "Error: $(KUBECTL) is required (see https://kubernetes.io/docs/tasks/tools/)."; exit 1; }
+

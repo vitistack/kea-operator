@@ -126,6 +126,7 @@ func OptionFromEnv() KeaOption {
 		_ = viper.BindEnv(consts.KEA_TLS_INSECURE)
 		_ = viper.BindEnv(consts.KEA_TLS_SERVER_NAME)
 		_ = viper.BindEnv(consts.KEA_TIMEOUT_SECONDS)
+		_ = viper.BindEnv(consts.KEA_DISABLE_KEEPALIVES)
 
 		full := viper.GetString(consts.KEA_URL)
 		base := viper.GetString(consts.KEA_BASE_URL)
@@ -166,6 +167,9 @@ func OptionFromEnv() KeaOption {
 			if cfg.HttpClient != nil {
 				cfg.HttpClient.Timeout = cfg.Timeout
 			}
+		}
+		if viper.GetBool(consts.KEA_DISABLE_KEEPALIVES) {
+			cfg.disableKeepAlives = true
 		}
 	})
 }

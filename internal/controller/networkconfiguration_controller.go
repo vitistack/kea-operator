@@ -69,7 +69,6 @@ const (
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	log.Info("Reconciling NetworkConfiguration")
 
 	// 1) Fetch the NetworkConfiguration
 	nc := &unstructured.Unstructured{}
@@ -423,20 +422,11 @@ func (r *NetworkConfigurationReconciler) ensureKeaReservationForMAC(ctx context.
 	if mac == "" {
 		return fmt.Errorf("missing mac")
 	}
-	// Check existing reservation by hardware address
-	getReq := keamodels.Request{
-		Command: "reservation-get-by-id",
-		Args: map[string]any{
-			"identifier-type": "hw-address",
-			"identifier":      mac,
-		},
-	}
-	resp, err := r.KeaClient.Send(ctx, getReq)
-	if err == nil && resp.Result == 0 {
-		// Exists
+	// Check if reservation already exists (subnet-scoped if possible)
+	if r.macReservationExists(ctx, mac, subnetID) {
 		return nil
 	}
-	// Add reservation
+	// Add reservation if missing
 	addReq := keamodels.Request{
 		Command: "reservation-add",
 		Args: map[string]any{
@@ -452,9 +442,87 @@ func (r *NetworkConfigurationReconciler) ensureKeaReservationForMAC(ctx context.
 		return addErr
 	}
 	if addResp.Result != 0 {
+		// Treat duplicate/add-already-present as success (idempotent behavior)
+		// lower := strings.ToLower(addResp.Text)
+		// if strings.Contains(lower, "already been added") || strings.Contains(lower, "already exists") || strings.Contains(lower, "duplicate") {
+		// 	return nil
+		// }
 		return fmt.Errorf("kea reservation-add failed: %s", addResp.Text)
 	}
 	return nil
+}
+
+// macReservationExists checks whether a reservation already exists for the given MAC + subnet.
+// It first tries the more specific 'reservation-get' (with subnet-id). If unsupported, it falls
+// back to 'reservation-get-by-id'. A true result means the reservation exists.
+func (r *NetworkConfigurationReconciler) macReservationExists(ctx context.Context, mac string, subnetID int) bool {
+	mac = strings.ToLower(strings.TrimSpace(mac))
+	if mac == "" {
+		return false
+	}
+
+	// 1. Primary: reservation-get-by-id (identifier-type + identifier) => hosts list
+	primary := keamodels.Request{
+		Command: "reservation-get-by-id",
+		Args: map[string]any{
+			"identifier-type": "hw-address",
+			"identifier":      mac,
+		},
+	}
+	if resp, err := r.KeaClient.Send(ctx, primary); err == nil {
+		if resp.Result == 0 { // success path returns hosts array
+			if hosts, ok := resp.Arguments["hosts"].([]any); ok {
+				for _, h := range hosts {
+					hm, ok := h.(map[string]any)
+					if !ok {
+						continue
+					}
+					if hw, ok2 := hm["hw-address"].(string); ok2 && strings.EqualFold(hw, mac) {
+						// Optional subnet check if provided
+						if sid, ok3 := hm["subnet-id"]; ok3 {
+							switch v := sid.(type) {
+							case float64:
+								if int(v) != subnetID {
+									continue
+								}
+							case int:
+								if v != subnetID {
+									continue
+								}
+							}
+						}
+						return true
+					}
+				}
+			}
+			// Hosts list present but no match => not exists for this subnet
+			return false
+		}
+		txt := strings.ToLower(resp.Text)
+		if strings.Contains(txt, "not found") || strings.Contains(txt, "no host") || strings.Contains(txt, "0 ipv4 host") {
+			return false
+		}
+		// Any non-success result falls through to fallback scan (reservation-get-all).
+	}
+
+	// 2. Fallback: reservation-get-all (scan hosts list for match)
+	fallback := keamodels.Request{Command: "reservation-get-all", Args: map[string]any{"subnet-id": subnetID}}
+	resp2, err2 := r.KeaClient.Send(ctx, fallback)
+	if err2 != nil || resp2.Result != 0 {
+		return false
+	}
+	if hosts, ok := resp2.Arguments["hosts"].([]any); ok {
+		for _, h := range hosts {
+			hm, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if hw, ok2 := hm["hw-address"].(string); ok2 && strings.EqualFold(hw, mac) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasReadyReconcilingForGeneration returns true if the Ready condition already reflects

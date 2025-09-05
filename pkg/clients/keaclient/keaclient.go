@@ -28,7 +28,8 @@ type keaClient struct {
 	Port       string
 	HttpClient *http.Client
 
-	lastConfigHash string // simple hash to avoid rebuilding transport when unchanged
+	lastConfigHash    string // simple hash to avoid rebuilding transport when unchanged
+	disableKeepAlives bool
 
 	// TLS options
 	CACertPath         string
@@ -234,7 +235,7 @@ func (c *keaClient) buildHTTPClient() {
 			tlsCfg.Certificates = []tls.Certificate{*cert}
 		}
 	}
-	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	transport := &http.Transport{TLSClientConfig: tlsCfg, DisableKeepAlives: c.disableKeepAlives}
 	c.HttpClient.Transport = transport
 	c.lastConfigHash = newHash
 	c.HttpClient.Timeout = c.Timeout

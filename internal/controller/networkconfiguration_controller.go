@@ -97,8 +97,8 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// Mark Reconciling only if not already recorded for current generation to avoid status update loop
-	if !hasReadyReconcilingForGeneration(nc, nc.GetGeneration()) {
+	// Mark Reconciling only once per generation (if we haven't yet observed this generation at all).
+	if ready := getReadyCondition(nc); ready == nil || ready.ObservedGeneration != nc.GetGeneration() {
 		_ = r.setCondition(ctx, nc, viticommonconditions.New(
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", nc.GetGeneration(),
 		))
@@ -459,32 +459,23 @@ func (r *NetworkConfigurationReconciler) ensureKeaReservationForMAC(ctx context.
 
 // hasReadyReconcilingForGeneration returns true if the Ready condition already reflects
 // a Reconciling (False/Reconciling) state for the provided generation, preventing redundant status patches.
-func hasReadyReconcilingForGeneration(nc *unstructured.Unstructured, generation int64) bool {
+// getReadyCondition returns the existing Ready condition (if any) from an unstructured object.
+func getReadyCondition(nc *unstructured.Unstructured) *metav1.Condition {
 	conds, found, _ := unstructured.NestedSlice(nc.Object, "status", "conditions")
 	if !found {
-		return false
+		return nil
 	}
 	for _, it := range conds {
 		m, ok := it.(map[string]any)
 		if !ok {
 			continue
 		}
-		typeStr, _ := m["type"].(string)
-		statusStr, _ := m["status"].(string)
-		reasonStr, _ := m["reason"].(string)
-		// ObservedGeneration may be encoded as float64 in unstructured
-		var obsGen int64
-		switch v := m["observedGeneration"].(type) {
-		case int64:
-			obsGen = v
-		case int32:
-			obsGen = int64(v)
-		case float64:
-			obsGen = int64(v)
-		}
-		if typeStr == conditionTypeReady && statusStr == string(metav1.ConditionFalse) && reasonStr == conditionReasonReconciling && obsGen == generation {
-			return true
+		var c metav1.Condition
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(m, &c); err == nil {
+			if c.Type == conditionTypeReady {
+				return &c
+			}
 		}
 	}
-	return false
+	return nil
 }

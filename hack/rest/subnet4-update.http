@@ -9,7 +9,7 @@ ca: hack/docker/certs/ca.crt
   "arguments": {
      "subnet4": [{
         "id": 2,
-        "subnet": "100.64.2.0/24"
+  "subnet": "10.123.2.0/24"
       }]
   }
 }

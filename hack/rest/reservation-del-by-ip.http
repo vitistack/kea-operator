@@ -18,7 +18,7 @@ ca: hack/docker/certs/ca.crt
     "command": "reservation-del",
     "arguments": {
         "subnet-id": 1,
-        "ip-address": "100.64.0.4",
+    "ip-address": "10.123.0.4",
         "operation-target": "all"
     }
 }

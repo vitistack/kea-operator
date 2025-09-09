@@ -7,7 +7,7 @@ ca: hack/docker/certs/ca.crt
 {
     "command": "lease4-add",
     "arguments": {
-        "ip-address": "100.64.0.123",
+    "ip-address": "10.123.0.123",
         "hw-address": "00:02:12:34:56:78",
         "subnet-id": 1
     }

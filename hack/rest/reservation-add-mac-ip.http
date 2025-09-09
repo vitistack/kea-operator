@@ -18,7 +18,7 @@ ca: hack/docker/certs/ca.crt
         "reservation": {
             "subnet-id": 1,
             "hw-address": "1a:1b:1c:1d:1e:1f",
-            "ip-address": "100.64.0.91"
+            "ip-address": "10.123.0.91"
         },
         "operation-target": "all"
     }

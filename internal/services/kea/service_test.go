@@ -25,13 +25,13 @@ func TestGetLeaseIPv4ForMAC_ArrayResponse_PicksLatest(t *testing.T) {
 			"leases": []any{
 				map[string]any{
 					"hw-address": mac,
-					"ip-address": "100.64.0.50",
+					"ip-address": "10.123.0.50",
 					"subnet-id":  1,
 					"cltt":       1000,
 				},
 				map[string]any{
 					"hw-address": mac,
-					"ip-address": "100.64.0.123",
+					"ip-address": "10.123.0.123",
 					"subnet-id":  1,
 					"cltt":       2000,
 				},
@@ -43,7 +43,7 @@ func TestGetLeaseIPv4ForMAC_ArrayResponse_PicksLatest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ip != "100.64.0.123" || sid != 1 {
+	if ip != "10.123.0.123" || sid != 1 {
 		t.Fatalf("unexpected ip/sid: %s/%d", ip, sid)
 	}
 }
@@ -55,7 +55,7 @@ func TestGetLeaseIPv4ForMAC_SingleObject(t *testing.T) {
 		Arguments: map[string]any{
 			"leases": map[string]any{
 				"hw-address": mac,
-				"ip-address": "100.64.0.200",
+				"ip-address": "10.123.0.200",
 				"subnet-id":  2,
 			},
 		},
@@ -65,7 +65,7 @@ func TestGetLeaseIPv4ForMAC_SingleObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ip != "100.64.0.200" || sid != 2 {
+	if ip != "10.123.0.200" || sid != 2 {
 		t.Fatalf("unexpected ip/sid: %s/%d", ip, sid)
 	}
 }

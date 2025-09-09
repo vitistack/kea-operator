@@ -21,7 +21,7 @@
             "space": "dhcp4"
           }
         ],
-        "option-def": [ ],
+        "option-def": [],
         "server-hostname": "",
         "test": "option[175].exists"
       },
@@ -49,7 +49,7 @@
             "space": "dhcp4"
           }
         ],
-        "option-def": [ ],
+        "option-def": [],
         "server-hostname": "",
         "test": "option[93].hex == 0x0007 and not option[175].exists"
       },
@@ -77,7 +77,7 @@
             "space": "dhcp4"
           }
         ],
-        "option-def": [ ],
+        "option-def": [],
         "server-hostname": "",
         "test": "option[93].hex == 0x0000 and not option[175].exists"
       }
@@ -152,11 +152,16 @@
         "library": "libdhcp_host_cmds.so"
       }
     ],
-    "host-reservation-identifiers": [ "hw-address", "duid", "circuit-id", "client-id" ],
+    "host-reservation-identifiers": [
+      "hw-address",
+      "duid",
+      "circuit-id",
+      "client-id"
+    ],
     "hostname-char-replacement": "",
     "hostname-char-set": "[^A-Za-z0-9.-]",
     "interfaces-config": {
-      "interfaces": [ "*" ],
+      "interfaces": ["*"],
       "re-detect": true
     },
     "ip-reservations-unique": true,
@@ -241,7 +246,7 @@
         "space": "dhcp4"
       }
     ],
-    "option-def": [ ],
+    "option-def": [],
     "parked-packet-limit": 128,
     "rebind-timer": 1296000,
     "renew-timer": 648000,
@@ -255,7 +260,7 @@
     },
     "server-hostname": "",
     "server-tag": "",
-    "shared-networks": [ ],
+    "shared-networks": [],
     "stash-agent-options": false,
     "statistic-default-sample-age": 0,
     "statistic-default-sample-count": 20,
@@ -276,7 +281,7 @@
             "always-send": false,
             "code": 3,
             "csv-format": true,
-            "data": "100.64.0.1",
+            "data": "10.123.0.1",
             "name": "routers",
             "never-send": false,
             "space": "dhcp4"
@@ -284,99 +289,103 @@
         ],
         "pools": [
           {
-            "evaluate-additional-classes": [ "biosclients", "ueficlients", "ipxeclients" ],
-            "option-data": [ ],
-            "pool": "100.64.0.4-100.64.0.254"
+            "evaluate-additional-classes": [
+              "biosclients",
+              "ueficlients",
+              "ipxeclients"
+            ],
+            "option-data": [],
+            "pool": "10.123.0.4-10.123.0.254"
           }
         ],
         "rebind-timer": 1296000,
         "relay": {
-          "ip-addresses": [ ]
+          "ip-addresses": []
         },
         "renew-timer": 648000,
         "reservations": [
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "1a:1b:1c:1d:1e:1f",
-            "ip-address": "100.64.0.91",
+            "ip-address": "10.123.0.91",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           },
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "1a:1b:1c:1d:1e:2f",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           },
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "bc:24:11:84:5e:fa",
-            "ip-address": "100.64.0.4",
+            "ip-address": "10.123.0.4",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           },
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "bc:24:11:96:cc:da",
-            "ip-address": "100.64.0.53",
+            "ip-address": "10.123.0.53",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           },
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "bc:24:11:ae:fd:de",
-            "ip-address": "100.64.0.33",
+            "ip-address": "10.123.0.33",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           },
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "f4:03:43:ea:c6:f0",
-            "ip-address": "100.64.0.122",
+            "ip-address": "10.123.0.122",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           },
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "f4:03:43:ea:d5:20",
-            "ip-address": "100.64.0.84",
+            "ip-address": "10.123.0.84",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           },
           {
             "boot-file-name": "",
-            "client-classes": [ ],
+            "client-classes": [],
             "hostname": "",
             "hw-address": "f4:03:43:ea:eb:10",
-            "ip-address": "100.64.0.97",
+            "ip-address": "10.123.0.97",
             "next-server": "0.0.0.0",
-            "option-data": [ ],
+            "option-data": [],
             "server-hostname": ""
           }
         ],
         "store-extended-info": false,
-        "subnet": "100.64.0.0/24",
+        "subnet": "10.123.0.0/24",
         "t1-percent": 0.5,
         "t2-percent": 0.875,
         "valid-lifetime": 2592000
@@ -396,7 +405,7 @@
             "always-send": false,
             "code": 3,
             "csv-format": true,
-            "data": "100.64.1.1",
+            "data": "10.123.1.1",
             "name": "routers",
             "never-send": false,
             "space": "dhcp4"
@@ -404,19 +413,23 @@
         ],
         "pools": [
           {
-            "evaluate-additional-classes": [ "biosclients", "ueficlients", "ipxeclients" ],
-            "option-data": [ ],
-            "pool": "100.64.1.4-100.64.1.254"
+            "evaluate-additional-classes": [
+              "biosclients",
+              "ueficlients",
+              "ipxeclients"
+            ],
+            "option-data": [],
+            "pool": "10.123.1.4-10.123.1.254"
           }
         ],
         "rebind-timer": 1296000,
         "relay": {
-          "ip-addresses": [ ]
+          "ip-addresses": []
         },
         "renew-timer": 648000,
-        "reservations": [ ],
+        "reservations": [],
         "store-extended-info": false,
-        "subnet": "100.64.1.0/24",
+        "subnet": "10.123.1.0/24",
         "t1-percent": 0.5,
         "t2-percent": 0.875,
         "valid-lifetime": 2592000
@@ -436,7 +449,7 @@
             "always-send": false,
             "code": 3,
             "csv-format": true,
-            "data": "100.64.3.1",
+            "data": "10.123.3.1",
             "name": "routers",
             "never-send": false,
             "space": "dhcp4"
@@ -444,19 +457,23 @@
         ],
         "pools": [
           {
-            "evaluate-additional-classes": [ "biosclients", "ueficlients", "ipxeclients" ],
-            "option-data": [ ],
-            "pool": "100.64.3.4-100.64.3.254"
+            "evaluate-additional-classes": [
+              "biosclients",
+              "ueficlients",
+              "ipxeclients"
+            ],
+            "option-data": [],
+            "pool": "10.123.3.4-10.123.3.254"
           }
         ],
         "rebind-timer": 1296000,
         "relay": {
-          "ip-addresses": [ ]
+          "ip-addresses": []
         },
         "renew-timer": 648000,
-        "reservations": [ ],
+        "reservations": [],
         "store-extended-info": false,
-        "subnet": "100.64.3.0/24",
+        "subnet": "10.123.3.0/24",
         "t1-percent": 0.5,
         "t2-percent": 0.875,
         "valid-lifetime": 2592000

@@ -4,7 +4,6 @@ metadata:
   name: test-networkconfiguration
 spec:
   name: test
-status:
   networkInterfaces:
     - name: testeth1
       dhcpReserved: false

@@ -6,7 +6,7 @@
       "type": "go",
       "request": "launch",
       "mode": "auto",
-      "program": "${workspaceFolder}/cmd",
+      "program": "${workspaceFolder}/cmd/main.go",
       "env": {
         "JSON_LOGGING": "false",
         "LOG_LEVEL": "debug",
@@ -25,7 +25,7 @@
       "type": "go",
       "request": "launch",
       "mode": "auto",
-      "program": "${workspaceFolder}/cmd",
+      "program": "${workspaceFolder}/cmd/main.go",
       "env": {
         "JSON_LOGGING": "false",
         "LOG_LEVEL": "debug",
@@ -44,7 +44,7 @@
       "type": "go",
       "request": "launch",
       "mode": "auto",
-      "program": "${workspaceFolder}/cmd",
+      "program": "${workspaceFolder}/cmd/main.go",
       "env": {
         "JSON_LOGGING": "false",
         "LOG_LEVEL": "debug",

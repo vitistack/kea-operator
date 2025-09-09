@@ -8,6 +8,6 @@ type Request struct {
 
 type Response struct {
 	Result    int            `json:"result"`
-	Text      string         `json:"text"`
+	Text      string         `json:"text,omitempty"`
 	Arguments map[string]any `json:"arguments,omitempty"`
 }

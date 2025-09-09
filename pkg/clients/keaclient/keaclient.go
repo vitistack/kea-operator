@@ -123,6 +123,16 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 	if err := json.Unmarshal(data, &arr); err == nil && len(arr) > 0 {
 		return arr[0], nil
 	}
+	// 1b. Lax parse allowing non-object arguments (e.g., list-commands returns arguments as array)
+	type laxResponse struct {
+		Result    int             `json:"result"`
+		Text      string          `json:"text"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	var arrLax []laxResponse
+	if err := json.Unmarshal(data, &arrLax); err == nil && len(arrLax) > 0 {
+		return keamodels.Response{Result: arrLax[0].Result, Text: arrLax[0].Text}, nil
+	}
 	// 2. Try wrapped object: { "responses": [ ... ] }
 	var wrapped struct {
 		Responses []keamodels.Response `json:"responses"`
@@ -130,13 +140,34 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 	if err := json.Unmarshal(data, &wrapped); err == nil && len(wrapped.Responses) > 0 {
 		return wrapped.Responses[0], nil
 	}
-	// 3. Try single object
+	// 2b. Lax wrapped parse
+	var wrappedLax struct {
+		Responses []laxResponse `json:"responses"`
+	}
+	if err := json.Unmarshal(data, &wrappedLax); err == nil && len(wrappedLax.Responses) > 0 {
+		lr := wrappedLax.Responses[0]
+		return keamodels.Response{Result: lr.Result, Text: lr.Text}, nil
+	}
+	// 3. Try single object (treat as valid even if text is empty and result == 0)
 	var single keamodels.Response
-	if err := json.Unmarshal(data, &single); err == nil && (single.Text != "" || single.Result != 0) {
+	if err := json.Unmarshal(data, &single); err == nil {
 		return single, nil
 	}
+	// 3b. Lax single object
+	var singleLax laxResponse
+	if err := json.Unmarshal(data, &singleLax); err == nil {
+		return keamodels.Response{Result: singleLax.Result, Text: singleLax.Text}, nil
+	}
 
-	vlog.Warn("unexpected Kea response payload", "body", string(data))
+	// Pretty-print JSON body when possible to aid debugging
+	pretty := string(data)
+	if len(data) > 0 {
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, data, "", "  "); err == nil {
+			pretty = buf.String()
+		}
+	}
+	vlog.Warn("unexpected Kea response payload", "body", pretty)
 	return keamodels.Response{}, errors.New("unrecognized Kea response format")
 }
 

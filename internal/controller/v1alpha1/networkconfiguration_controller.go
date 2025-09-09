@@ -14,15 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package v1alpha1
 
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
+	"github.com/vitistack/common/pkg/loggers/vlog"
+	viticommonconditions "github.com/vitistack/common/pkg/operator/conditions"
+	viticommonfinalizers "github.com/vitistack/common/pkg/operator/finalizers"
+	reconcileutil "github.com/vitistack/common/pkg/operator/reconcileutil"
+	"github.com/vitistack/kea-operator/internal/util/unstructuredconv"
+	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
+	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,12 +36,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-
-	viticommonconditions "github.com/vitistack/common/pkg/operator/conditions"
-	viticommonfinalizers "github.com/vitistack/common/pkg/operator/finalizers"
-	reconcileutil "github.com/vitistack/common/pkg/operator/reconcileutil"
-	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
-	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 )
 
 // NetworkConfigurationReconciler reconciles a NetworkConfiguration object
@@ -189,89 +189,30 @@ func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx c
 	return "", fmt.Errorf("NetworkNamespace missing status.ipv4_prefix in namespace %s", namespace)
 }
 
-// extractMACsFromNetworkConfiguration attempts to read MAC addresses from the NetworkConfiguration CR (spec or status).
-// It tries several common field shapes and validates values as MAC addresses.
+// extractMACsFromNetworkConfiguration reads MAC addresses strictly from spec.networkInterfaces[].macAddress.
+// It normalizes case, trims whitespace, replaces '-' with ':', and validates each value as a MAC address.
 func extractMACsFromNetworkConfiguration(nc *unstructured.Unstructured) []string {
-	// Work directly with unstructured for flexible traversal
-	objMap := nc.Object
-
-	// Utility to normalize and validate MACs
-	addMAC := func(dst map[string]struct{}, val string) {
-		s := strings.ToLower(strings.TrimSpace(val))
-		if s == "" {
-			return
-		}
-		if _, err := net.ParseMAC(s); err != nil {
-			// try replacing '-' with ':'
-			s2 := strings.ReplaceAll(s, "-", ":")
-			if _, err2 := net.ParseMAC(s2); err2 != nil {
-				return
-			}
-			s = s2
-		}
-		dst[s] = struct{}{}
+	networkconf, err := unstructuredconv.ToNetworkConfiguration(nc)
+	if err != nil {
+		vlog.Debug("failed to convert to typed NetworkConfiguration", "error", err)
+		return nil
 	}
 
-	found := map[string]struct{}{}
-
-	// Candidate paths to look for arrays of MAC strings
-	paths := [][]string{
-		{"spec", "networkInterfaces"},
-		{"status", "networkInterfaces"},
-		{"spec", "macs"},
-		{"status", "macs"},
+	if len(networkconf.Spec.NetworkInterfaces) == 0 {
+		vlog.Debug("no network interfaces found")
+		return nil
 	}
 
-	for _, p := range paths {
-		// If the path is an array of interface objects, search per-item common keys
-		if arr, ok, _ := unstructured.NestedSlice(objMap, p...); ok {
-			for _, it := range arr {
-				switch v := it.(type) {
-				case string:
-					addMAC(found, v)
-				case map[string]any:
-					// common keys
-					for _, k := range []string{"mac", "macAddress", "hwAddress", "hw-address", "macs"} {
-						if val, ok := v[k]; ok {
-							switch vv := val.(type) {
-							case string:
-								addMAC(found, vv)
-							case []any:
-								for _, e := range vv {
-									if s, ok := e.(string); ok {
-										addMAC(found, s)
-									}
-								}
-							case []string:
-								for _, s := range vv {
-									addMAC(found, s)
-								}
-							}
-						}
-					}
-				}
+	macs := []string{}
+	for _, ni := range networkconf.Spec.NetworkInterfaces {
+		if ni.MacAddress != "" {
+			s := strings.ToLower(strings.TrimSpace(ni.MacAddress))
+			if s != "" {
+				macs = append(macs, s)
 			}
 		}
 	}
-
-	// Also check top-level convenience fields
-	for _, key := range []string{"spec", "status"} {
-		if m, ok := objMap[key].(map[string]any); ok {
-			if val, ok2 := m["mac"].(string); ok2 {
-				addMAC(found, val)
-			}
-			if val, ok2 := m["macAddress"].(string); ok2 {
-				addMAC(found, val)
-			}
-		}
-	}
-
-	// Convert set to slice
-	out := make([]string, 0, len(found))
-	for k := range found {
-		out = append(out, k)
-	}
-	return out
+	return macs
 }
 
 // ensureKeaLeaseForMAC ensures a lease exists for the given MAC; if missing, it adds one using an IP from the prefix

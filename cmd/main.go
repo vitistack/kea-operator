@@ -21,27 +21,27 @@ import (
 	"flag"
 	"os"
 
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"github.com/vitistack/common/pkg/loggers/vlog"
+	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
+	"github.com/vitistack/kea-operator/internal/clients"
+	"github.com/vitistack/kea-operator/internal/services/initialchecks"
 
+	// +kubebuilder:scaffold:imports
+	"github.com/vitistack/kea-operator/internal/controller/v1alpha1"
+	"github.com/vitistack/kea-operator/internal/settings"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
+	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	// to ensure that exec-entrypoint and run can make use of them.
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
-	"github.com/vitistack/common/pkg/loggers/vlog"
-	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
-
-	"github.com/vitistack/kea-operator/internal/clients"
-	"github.com/vitistack/kea-operator/internal/controller"
-	"github.com/vitistack/kea-operator/internal/settings"
-	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -70,7 +70,7 @@ func main() {
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":9995", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -99,6 +99,8 @@ func main() {
 	ctrl.SetLogger(vlog.Logr())
 
 	clients.InitializeClients()
+
+	initialchecks.InitialChecks()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -218,7 +220,7 @@ func setupReconcilers(mgr ctrl.Manager) {
 	// +kubebuilder:scaffold:builder
 
 	vlog.Info("All controllers and webhooks are set up")
-	kubernetesClusterReconciler := controller.NewNetworkConfigurationReconciler(mgr, clients.KeaClient)
+	kubernetesClusterReconciler := v1alpha1.NewNetworkConfigurationReconciler(mgr, clients.KeaClient)
 	if err := kubernetesClusterReconciler.SetupWithManager(mgr); err != nil {
 		vlog.Error("unable to create controller", err)
 		os.Exit(1)

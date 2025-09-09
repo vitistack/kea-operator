@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -26,9 +27,10 @@ import (
 	viticommonconditions "github.com/vitistack/common/pkg/operator/conditions"
 	viticommonfinalizers "github.com/vitistack/common/pkg/operator/finalizers"
 	reconcileutil "github.com/vitistack/common/pkg/operator/reconcileutil"
+	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
+	keaservice "github.com/vitistack/kea-operator/internal/services/kea"
 	"github.com/vitistack/kea-operator/internal/util/unstructuredconv"
 	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
-	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,11 +40,15 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// NetworkConfigurationReconciler reconciles a NetworkConfiguration object
+// NetworkConfigurationReconciler reconciles vitistack.io/v1alpha1 NetworkConfiguration
+// resources. It fetches objects as Unstructured for loose coupling, converts to
+// typed CRs for strict, type-safe access, and ensures DHCP reservations in Kea
+// based on existing leases and a NetworkNamespace IPv4 prefix policy.
 type NetworkConfigurationReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	KeaClient keainterface.KeaClient
+	Kea       *keaservice.Service
 }
 
 const (
@@ -58,48 +64,53 @@ const (
 // +kubebuilder:rbac:groups=vitistack.io,resources=networkconfigurations/finalizers,verbs=update
 // +kubebuilder:rbac:groups=vitistack.io,resources=networknamespaces,verbs=get;list;watch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the NetworkConfiguration object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
+// Reconcile fetches the NetworkConfiguration as Unstructured, converts it to the
+// typed CR, reads MAC addresses from spec.networkInterfaces[].macAddress, looks
+// up the NetworkNamespace IPv4 prefix, resolves the Kea subnet-id, and for each
+// MAC requires an existing Kea lease and creates an explicit reservation for that
+// IP within the subnet. Status conditions are patched back onto the Unstructured
+// object to avoid tight type coupling of status.
 func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	// 1) Fetch the NetworkConfiguration
-	nc := &unstructured.Unstructured{}
-	nc.SetGroupVersionKind(schema.GroupVersionKind{Group: "vitistack.io", Version: "v1alpha1", Kind: "NetworkConfiguration"})
-	if err := r.Get(ctx, req.NamespacedName, nc); err != nil {
+	ncU := &unstructured.Unstructured{}
+	ncU.SetGroupVersionKind(schema.GroupVersionKind{Group: "vitistack.io", Version: "v1alpha1", Kind: "NetworkConfiguration"})
+	if err := r.Get(ctx, req.NamespacedName, ncU); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Convert to strictly typed NetworkConfiguration for spec access
+	nc, err := unstructuredconv.ToNetworkConfiguration(ncU)
+	if err != nil {
+		log.Error(err, "failed to convert NetworkConfiguration to typed object")
+		// Nothing actionable without a valid spec; requeue softly
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
 	// Ensure finalizer on non-deleted objects
-	if nc.GetDeletionTimestamp().IsZero() {
-		if !viticommonfinalizers.Has(nc, finalizerName) {
-			if err := viticommonfinalizers.Ensure(ctx, r.Client, nc, finalizerName); err != nil {
+	if ncU.GetDeletionTimestamp().IsZero() {
+		if !viticommonfinalizers.Has(ncU, finalizerName) {
+			if err := viticommonfinalizers.Ensure(ctx, r.Client, ncU, finalizerName); err != nil {
 				return reconcileutil.Requeue(err)
 			}
 			return ctrl.Result{}, nil
 		}
 	} else {
 		// Handle deletion: best-effort cleanup then remove finalizer
-		if err := r.cleanupReservations(ctx, nc); err != nil {
+		if err := r.cleanupReservations(ctx, ncU); err != nil {
 			log.Error(err, "cleanup during deletion failed")
 		}
-		if err := viticommonfinalizers.Remove(ctx, r.Client, nc, finalizerName); err != nil {
+		if err := viticommonfinalizers.Remove(ctx, r.Client, ncU, finalizerName); err != nil {
 			return reconcileutil.Requeue(err)
 		}
 		return ctrl.Result{}, nil
 	}
 
 	// Mark Reconciling only once per generation (if we haven't yet observed this generation at all).
-	if ready := getReadyCondition(nc); ready == nil || ready.ObservedGeneration != nc.GetGeneration() {
-		_ = r.setCondition(ctx, nc, viticommonconditions.New(
-			conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", nc.GetGeneration(),
+	if ready := getReadyCondition(ncU); ready == nil || ready.ObservedGeneration != ncU.GetGeneration() {
+		_ = r.setCondition(ctx, ncU, viticommonconditions.New(
+			conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", ncU.GetGeneration(),
 		))
 	}
 
@@ -112,7 +123,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// 3) Collect MAC addresses from the NetworkConfiguration resource itself
-	macs := extractMACsFromNetworkConfiguration(nc)
+	macs := extractMACsFromTypedNetworkConfiguration(nc)
 	if len(macs) == 0 {
 		log.Info("no MAC addresses found on NetworkConfiguration; skipping reservation", "name", nc.GetName(), "namespace", nc.GetNamespace())
 		// No error; just exit without requeue
@@ -120,12 +131,12 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// 4) Find subnet-id for this prefix in Kea
-	subnetID, err := r.getKeaSubnetID(ctx, ipv4Prefix)
+	subnetID, err := r.Kea.GetSubnetID(ctx, ipv4Prefix)
 	if err != nil {
 		log.Error(err, "failed to resolve Kea subnet id", "ipv4Prefix", ipv4Prefix)
 		txt := strings.ToLower(err.Error())
-		_ = r.setCondition(ctx, nc, viticommonconditions.New(
-			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("resolve subnet: %v", err), nc.GetGeneration(),
+		_ = r.setCondition(ctx, ncU, viticommonconditions.New(
+			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("resolve subnet: %v", err), ncU.GetGeneration(),
 		))
 		// Do not hot-loop if command unsupported; just return without requeue (will reconcile on next event or resync)
 		if strings.Contains(txt, "unsupported kea command") || strings.Contains(txt, "not supported") {
@@ -135,29 +146,66 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	// 5) Ensure reservations per MAC in Kea (idempotent)
+	// 5) For each MAC, require an existing lease in Kea; use its IP to create a reservation.
+	var errs []string
+	var ipnet *net.IPNet
+	if _, n, e := net.ParseCIDR(strings.TrimSpace(ipv4Prefix)); e == nil {
+		ipnet = n
+	}
 	for _, mac := range macs {
-		if err := r.ensureKeaReservationForMAC(ctx, mac, subnetID); err != nil {
-			log.Error(err, "failed to ensure Kea reservation for MAC", "mac", mac, "subnetID", subnetID)
-			// continue
+		ip, leaseSubnetID, lerr := r.Kea.GetLeaseIPv4ForMAC(ctx, mac)
+		if lerr != nil || ip == "" {
+			if lerr != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", mac, lerr))
+			} else {
+				errs = append(errs, fmt.Sprintf("%s: no lease found", mac))
+			}
+			continue
 		}
+		// Optional safety: ensure lease IP is within the namespace prefix
+		if ipnet != nil {
+			if p := net.ParseIP(ip); p == nil || p.To4() == nil || !ipnet.Contains(p) {
+				errs = append(errs, fmt.Sprintf("%s: lease IP %s not within %s", mac, ip, ipv4Prefix))
+				continue
+			}
+		}
+		// Prefer Kea's reported subnet-id if present, else use resolved subnetID
+		sid := subnetID
+		if leaseSubnetID > 0 {
+			sid = leaseSubnetID
+		}
+		if err := r.Kea.EnsureReservationForMACIP(ctx, mac, sid, ip); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", mac, err))
+			continue
+		}
+	}
+	if len(errs) > 0 {
+		_ = r.setCondition(ctx, ncU, viticommonconditions.New(
+			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("lease/reservation errors: %s", strings.Join(errs, "; ")), ncU.GetGeneration(),
+		))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// Success: set Ready True
-	_ = r.setCondition(ctx, nc, viticommonconditions.New(
-		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", nc.GetGeneration(),
+	_ = r.setCondition(ctx, ncU, viticommonconditions.New(
+		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", ncU.GetGeneration(),
 	))
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
+// NewNetworkConfigurationReconciler constructs a new reconciler, wiring the
+// controller-runtime client/scheme and a Kea service wrapper around the given client.
 func NewNetworkConfigurationReconciler(mgr ctrl.Manager, keaClient keainterface.KeaClient) *NetworkConfigurationReconciler {
 	return &NetworkConfigurationReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		KeaClient: keaClient,
+		Kea:       keaservice.New(keaClient),
 	}
 }
 
+// SetupWithManager registers the controller with the manager, watching
+// NetworkConfiguration resources as Unstructured instances.
 func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Watch NetworkConfiguration as unstructured to avoid scheme coupling
 	u := &unstructured.Unstructured{}
@@ -168,7 +216,9 @@ func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		Complete(r)
 }
 
-// getIPv4PrefixFromNetworkNamespace returns status.ipv4_prefix from the NetworkNamespace
+// getIPv4PrefixFromNetworkNamespace returns the typed NetworkNamespace.Status.IPv4Prefix
+// for the provided Kubernetes namespace. It lists NetworkNamespace objects as
+// Unstructured and converts the first item to the typed CR to access the field.
 func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx context.Context, namespace string) (string, error) {
 	// Use unstructured to avoid tight coupling if the type isn't available
 	nnList := &unstructured.UnstructuredList{}
@@ -182,85 +232,83 @@ func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx c
 		return "", fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
 	}
 	// Assume single NetworkNamespace per Kubernetes namespace
-	nn := nnList.Items[0]
-	if v, found, _ := unstructured.NestedString(nn.Object, "status", "ipv4_prefix"); found && v != "" {
-		return v, nil
+	nnU := nnList.Items[0]
+	// Convert to typed for strict access
+	nn, err := unstructuredconv.ToNetworkNamespace(&nnU)
+	if err != nil {
+		return "", fmt.Errorf("failed to convert NetworkNamespace: %w", err)
 	}
-	return "", fmt.Errorf("NetworkNamespace missing status.ipv4_prefix in namespace %s", namespace)
+	if nn.Status.IPv4Prefix != "" {
+		return nn.Status.IPv4Prefix, nil
+	}
+	return "", fmt.Errorf("NetworkNamespace missing status.IPv4Prefix in namespace %s", namespace)
 }
 
-// extractMACsFromNetworkConfiguration reads MAC addresses strictly from spec.networkInterfaces[].macAddress.
-// It normalizes case, trims whitespace, replaces '-' with ':', and validates each value as a MAC address.
-func extractMACsFromNetworkConfiguration(nc *unstructured.Unstructured) []string {
-	networkconf, err := unstructuredconv.ToNetworkConfiguration(nc)
-	if err != nil {
-		vlog.Debug("failed to convert to typed NetworkConfiguration", "error", err)
-		return nil
-	}
-
+// extractMACsFromTypedNetworkConfiguration reads MAC addresses strictly from
+// spec.networkInterfaces[].macAddress on the typed NetworkConfiguration. It
+// normalizes to lowercase, trims whitespace, replaces '-' with ':', validates
+// using net.ParseMAC, and returns a de-duplicated list.
+func extractMACsFromTypedNetworkConfiguration(networkconf *vitistackcrdsv1alpha1.NetworkConfiguration) []string {
 	if len(networkconf.Spec.NetworkInterfaces) == 0 {
 		vlog.Debug("no network interfaces found")
 		return nil
 	}
 
-	macs := []string{}
+	// Normalize, validate, and deduplicate
+	uniq := make(map[string]struct{})
 	for _, ni := range networkconf.Spec.NetworkInterfaces {
-		if ni.MacAddress != "" {
-			s := strings.ToLower(strings.TrimSpace(ni.MacAddress))
-			if s != "" {
-				macs = append(macs, s)
-			}
+		if ni.MacAddress == "" {
+			continue
 		}
+		s := strings.ToLower(strings.TrimSpace(ni.MacAddress))
+		if s == "" {
+			continue
+		}
+		// Accept addresses using '-' by normalizing to ':'
+		s = strings.ReplaceAll(s, "-", ":")
+		if _, err := net.ParseMAC(s); err != nil {
+			continue
+		}
+		uniq[s] = struct{}{}
 	}
-	return macs
+	if len(uniq) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(uniq))
+	for m := range uniq {
+		out = append(out, m)
+	}
+	return out
 }
 
-// ensureKeaLeaseForMAC ensures a lease exists for the given MAC; if missing, it adds one using an IP from the prefix
-// Note: legacy lease-based helpers were removed in favor of reservation-based flow.
-
-// cleanupReservations best-effort removal of reservations on delete.
-
-func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, nc *unstructured.Unstructured) error {
-	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, nc.GetNamespace())
+// cleanupReservations best-effort removal of reservations on delete. It converts
+// the Unstructured NetworkConfiguration to typed form to extract MACs, resolves
+// the subnet-id for the namespace prefix, and issues reservation deletions in Kea.
+func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, ncU *unstructured.Unstructured) error {
+	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, ncU.GetNamespace())
 	if err != nil {
 		return err
 	}
-	subnetID, err := r.getKeaSubnetID(ctx, ipv4Prefix)
+	subnetID, err := r.Kea.GetSubnetID(ctx, ipv4Prefix)
 	if err != nil {
 		return err
 	}
-	macs := extractMACsFromNetworkConfiguration(nc)
+	// Convert to typed NC to extract MACs strictly
+	networkconf, convErr := unstructuredconv.ToNetworkConfiguration(ncU)
+	if convErr != nil {
+		vlog.Debug("failed to convert to typed NetworkConfiguration during cleanup", "error", convErr)
+		return nil
+	}
+	macs := extractMACsFromTypedNetworkConfiguration(networkconf)
 	for _, mac := range macs {
-		_ = r.deleteKeaReservationForMAC(ctx, mac, subnetID)
+		_ = r.Kea.DeleteReservationForMAC(ctx, mac, subnetID)
 	}
 	return nil
 }
 
-func (r *NetworkConfigurationReconciler) deleteKeaReservationForMAC(ctx context.Context, mac string, subnetID int) error {
-	mac = strings.ToLower(strings.TrimSpace(mac))
-	if mac == "" {
-		return fmt.Errorf("missing mac")
-	}
-	delReq := keamodels.Request{
-		Command: "reservation-del",
-		Args: map[string]any{
-			"subnet-id":        subnetID,
-			"identifier-type":  "hw-address",
-			"identifier":       mac,
-			"operation-target": "all",
-		},
-	}
-	resp, err := r.KeaClient.Send(ctx, delReq)
-	if err != nil {
-		return err
-	}
-	if resp.Result != 0 {
-		return fmt.Errorf("kea reservation-del failed: %s", resp.Text)
-	}
-	return nil
-}
-
-// setCondition patches the status with the given condition using common conditions helper.
+// setCondition patches the status.conditions on the provided Unstructured object
+// using the common conditions helper, and avoids no-op patches when the condition
+// did not meaningfully change.
 func (r *NetworkConfigurationReconciler) setCondition(ctx context.Context, nc *unstructured.Unstructured, cond metav1.Condition) error {
 	base := nc.DeepCopy()
 
@@ -321,154 +369,8 @@ func (r *NetworkConfigurationReconciler) setCondition(ctx context.Context, nc *u
 	return r.Status().Patch(ctx, nc, client.MergeFrom(base))
 }
 
-// getKeaSubnetID lists Kea subnets and returns the id of the subnet matching the given IPv4 CIDR prefix.
-func (r *NetworkConfigurationReconciler) getKeaSubnetID(ctx context.Context, ipv4Prefix string) (int, error) {
-	req := keamodels.Request{Command: "subnet4-list", Args: map[string]any{}}
-	resp, err := r.KeaClient.Send(ctx, req)
-	if err != nil {
-		return 0, err
-	}
-	if resp.Result != 0 {
-		// If command unsupported we should not hot-loop endlessly.
-		if strings.Contains(strings.ToLower(resp.Text), "not supported") {
-			return 0, fmt.Errorf("unsupported kea command subnet4-list: %s", resp.Text)
-		}
-		return 0, fmt.Errorf("kea subnet4-list failed: %s", resp.Text)
-	}
-	subnets, ok := resp.Arguments["subnets"].([]any)
-	if !ok {
-		return 0, fmt.Errorf("unexpected subnet4-list response shape")
-	}
-	for _, s := range subnets {
-		m, ok := s.(map[string]any)
-		if !ok {
-			continue
-		}
-		if sub, ok := m["subnet"].(string); ok && sub == ipv4Prefix {
-			switch idv := m["id"].(type) {
-			case float64:
-				return int(idv), nil
-			case int:
-				return idv, nil
-			}
-		}
-	}
-	return 0, fmt.Errorf("no matching Kea subnet for prefix %s", ipv4Prefix)
-}
-
-// ensureKeaReservationForMAC ensures a reservation for the MAC exists in the given subnet.
-// If not found, it adds one without explicit IP (server assigns), targeting both memory and DB (operation-target=all).
-func (r *NetworkConfigurationReconciler) ensureKeaReservationForMAC(ctx context.Context, mac string, subnetID int) error {
-	mac = strings.ToLower(strings.TrimSpace(mac))
-	if mac == "" {
-		return fmt.Errorf("missing mac")
-	}
-	// Check if reservation already exists (subnet-scoped if possible)
-	if r.macReservationExists(ctx, mac, subnetID) {
-		return nil
-	}
-	// Add reservation if missing
-	addReq := keamodels.Request{
-		Command: "reservation-add",
-		Args: map[string]any{
-			"reservation": map[string]any{
-				"subnet-id":  subnetID,
-				"hw-address": mac,
-			},
-			"operation-target": "all",
-		},
-	}
-	addResp, addErr := r.KeaClient.Send(ctx, addReq)
-	if addErr != nil {
-		return addErr
-	}
-	if addResp.Result != 0 {
-		// Treat duplicate/add-already-present as success (idempotent behavior)
-		// lower := strings.ToLower(addResp.Text)
-		// if strings.Contains(lower, "already been added") || strings.Contains(lower, "already exists") || strings.Contains(lower, "duplicate") {
-		// 	return nil
-		// }
-		return fmt.Errorf("kea reservation-add failed: %s", addResp.Text)
-	}
-	return nil
-}
-
-// macReservationExists checks whether a reservation already exists for the given MAC + subnet.
-// It first tries the more specific 'reservation-get' (with subnet-id). If unsupported, it falls
-// back to 'reservation-get-by-id'. A true result means the reservation exists.
-func (r *NetworkConfigurationReconciler) macReservationExists(ctx context.Context, mac string, subnetID int) bool {
-	mac = strings.ToLower(strings.TrimSpace(mac))
-	if mac == "" {
-		return false
-	}
-
-	// 1. Primary: reservation-get-by-id (identifier-type + identifier) => hosts list
-	primary := keamodels.Request{
-		Command: "reservation-get-by-id",
-		Args: map[string]any{
-			"identifier-type": "hw-address",
-			"identifier":      mac,
-		},
-	}
-	if resp, err := r.KeaClient.Send(ctx, primary); err == nil {
-		if resp.Result == 0 { // success path returns hosts array
-			if hosts, ok := resp.Arguments["hosts"].([]any); ok {
-				for _, h := range hosts {
-					hm, ok := h.(map[string]any)
-					if !ok {
-						continue
-					}
-					if hw, ok2 := hm["hw-address"].(string); ok2 && strings.EqualFold(hw, mac) {
-						// Optional subnet check if provided
-						if sid, ok3 := hm["subnet-id"]; ok3 {
-							switch v := sid.(type) {
-							case float64:
-								if int(v) != subnetID {
-									continue
-								}
-							case int:
-								if v != subnetID {
-									continue
-								}
-							}
-						}
-						return true
-					}
-				}
-			}
-			// Hosts list present but no match => not exists for this subnet
-			return false
-		}
-		txt := strings.ToLower(resp.Text)
-		if strings.Contains(txt, "not found") || strings.Contains(txt, "no host") || strings.Contains(txt, "0 ipv4 host") {
-			return false
-		}
-		// Any non-success result falls through to fallback scan (reservation-get-all).
-	}
-
-	// 2. Fallback: reservation-get-all (scan hosts list for match)
-	fallback := keamodels.Request{Command: "reservation-get-all", Args: map[string]any{"subnet-id": subnetID}}
-	resp2, err2 := r.KeaClient.Send(ctx, fallback)
-	if err2 != nil || resp2.Result != 0 {
-		return false
-	}
-	if hosts, ok := resp2.Arguments["hosts"].([]any); ok {
-		for _, h := range hosts {
-			hm, ok := h.(map[string]any)
-			if !ok {
-				continue
-			}
-			if hw, ok2 := hm["hw-address"].(string); ok2 && strings.EqualFold(hw, mac) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// hasReadyReconcilingForGeneration returns true if the Ready condition already reflects
-// a Reconciling (False/Reconciling) state for the provided generation, preventing redundant status patches.
-// getReadyCondition returns the existing Ready condition (if any) from an unstructured object.
+// getReadyCondition extracts and returns the existing Ready condition from the
+// Unstructured object's status.conditions, or nil if not present.
 func getReadyCondition(nc *unstructured.Unstructured) *metav1.Condition {
 	conds, found, _ := unstructured.NestedSlice(nc.Object, "status", "conditions")
 	if !found {

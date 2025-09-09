@@ -5,10 +5,8 @@ key: hack/docker/certs/client.key
 ca: hack/docker/certs/ca.crt
 
 {
-    "command": "lease4-add",
+    "command": "lease4-get-all",
     "arguments": {
-        "ip-address": "100.64.0.123",
-        "hw-address": "00:02:12:34:56:78",
-        "subnet-id": 1
+        "subnets": [1]
     }
 }

@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"testing"
 
+	"github.com/vitistack/kea-operator/internal/util/unstructuredconv"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -100,7 +101,12 @@ func TestExtractMACs_Scenarios(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(tt *testing.T) {
 			u := mk(tc.spec, tc.status)
-			got := extractMACsFromNetworkConfiguration(u)
+			// Convert to typed NetworkConfiguration and then extract
+			nc, err := unstructuredconv.ToNetworkConfiguration(u)
+			if err != nil {
+				tt.Fatalf("conversion failed: %v", err)
+			}
+			got := extractMACsFromTypedNetworkConfiguration(nc)
 			ok, extra := setEquals(got, tc.want)
 			if !ok {
 				tt.Fatalf("unexpected result: got=%v unexpected=%s want-set=%v", got, extra, tc.want)

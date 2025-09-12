@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 
+	"github.com/vitistack/common/pkg/clients/k8sclient"
 	"github.com/vitistack/common/pkg/loggers/vlog"
 	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
 	"github.com/vitistack/kea-operator/internal/clients"
@@ -97,6 +98,8 @@ func main() {
 	}()
 
 	ctrl.SetLogger(vlog.Logr())
+
+	k8sclient.Init()
 
 	clients.InitializeClients()
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/vitistack/common/pkg/loggers/vlog"
+	"github.com/vitistack/common/pkg/operator/crdcheck"
 	"github.com/vitistack/kea-operator/internal/clients"
 	"github.com/vitistack/kea-operator/internal/consts"
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
@@ -17,6 +18,17 @@ import (
 // InitialChecks verifies connectivity to Kea DHCP at startup using the configured client (Viper-driven).
 // It attempts a lightweight command and fails fast if the service is unreachable after a few retries.
 func InitialChecks() {
+	if !checkKea() {
+		os.Exit(1)
+	}
+
+	crdcheck.MustEnsureInstalled(context.TODO(),
+		crdcheck.Ref{Group: "vitistack.io", Version: "v1alpha1", Resource: "networknamespaces"},     // your CRD plural
+		crdcheck.Ref{Group: "vitistack.io", Version: "v1alpha1", Resource: "networkconfigurations"}, // your CRD plural
+	)
+}
+
+func checkKea() bool {
 	host := viper.GetString(consts.KEA_HOST)
 	port := viper.GetString(consts.KEA_PORT)
 	base := viper.GetString(consts.KEA_BASE_URL)
@@ -25,7 +37,7 @@ func InitialChecks() {
 	if clients.KeaClient == nil {
 		vlog.Error("Kea client not initialized; check configuration (KEA_HOST/PORT or KEA_URL)")
 		os.Exit(1)
-		return
+		return true
 	}
 
 	// Retry a few times to tolerate slow startup/order
@@ -43,7 +55,7 @@ func InitialChecks() {
 		cancel()
 		if err == nil {
 			vlog.Info("kea connectivity OK")
-			return
+			return true
 		}
 		lastErr = err
 		vlog.Warn("kea connectivity attempt failed", "attempt", attempt, "error", err)
@@ -52,6 +64,7 @@ func InitialChecks() {
 
 	vlog.Error("failed to connect to Kea after retries", lastErr)
 	os.Exit(1)
+	return false
 }
 
 // pingKea sends a minimal command to verify reachability. We use 'list-commands' which is widely supported.

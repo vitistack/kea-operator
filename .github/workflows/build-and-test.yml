@@ -45,6 +45,13 @@ jobs:
           echo "Version $VERSION"
           make build
 
+      - name: Lint
+        run: |
+          VERSION="${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}"
+          VERSION="${VERSION#v*}"
+          echo "Version $VERSION"
+          make lint
+
       - name: Setup test environment
         run: |
           if [ ! -d "bin/k8s" ] || [ -z "$(ls -A bin/k8s 2>/dev/null)" ]; then

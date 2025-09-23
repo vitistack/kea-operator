@@ -6,7 +6,7 @@ Kubernetes operator that ensures DHCPv4 reservations in ISC Kea based on VitiSta
 
 - Watches `vitistack.io/v1alpha1` NetworkConfiguration resources
 - Reads MACs from `spec.networkInterfaces[].macAddress`
-- Gets the namespace IPv4 prefix from `NetworkNamespace.status.ipv4_prefix`
+- Gets the namespace IPv4 prefix from `NetworkNamespace.status.ipv4Prefix`
 - Resolves Kea subnet-id via `subnet4-list`
 - Looks up current leases via `lease4-get-by-hw-address`
 - Creates or confirms reservations with `reservation-add` (and removes on delete)
@@ -63,10 +63,10 @@ kind: NetworkNamespace
 metadata:
 	name: demo
 status:
-		ipv4_prefix: 10.123.0.0/24
+	ipv4Prefix: 10.123.0.0/24
 ```
 
-Add a NetworkConfiguration listing MAC addresses. The operator will look up each MAC’s current lease in Kea and create a reservation for that IP in the namespace’s subnet.
+Add a NetworkConfiguration listing MAC addresses. The operator will look up each MAC’s current lease in Kea and create a reservation for that IP in the namespace’s subnet. The CRD requires identifiers like `clusterName`, `datacenterName`, `namespaceName`, and `provider` in `spec`.
 
 ```yaml
 apiVersion: vitistack.io/v1alpha1
@@ -75,6 +75,10 @@ metadata:
 	name: demo
 	namespace: demo
 spec:
+  clusterName: example-cluster
+  datacenterName: dc1
+  namespaceName: demo
+  provider: example
 	networkInterfaces:
 		- name: eth0
 			macAddress: "00:02:12:34:56:78"

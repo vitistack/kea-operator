@@ -6,4 +6,18 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: networkconfiguration-sample
 spec:
-  # TODO(user): Add fields here
+  # Required identifiers
+  clusterName: example-cluster
+  datacenterName: dc1
+  namespaceName: default
+  provider: example
+
+  # Optional: list of network interfaces; only macAddress is used by the operator today
+  networkInterfaces:
+    - name: eth0
+      macAddress: AA-BB-CC-DD-EE-FF
+      # The fields below are accepted by the CRD but not required by the operator
+      # ipv4Subnet: 10.0.0.0/24
+      # ipv4Gateway: 10.0.0.1
+      # ipv4Addresses: ["10.0.0.10"]
+      # dns: ["1.1.1.1", "8.8.8.8"]

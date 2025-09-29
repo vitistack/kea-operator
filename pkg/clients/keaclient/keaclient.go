@@ -109,7 +109,7 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 	}
 	defer func() {
 		if cerr := resp.Body.Close(); cerr != nil {
-			vlog.Error("failed to close response body: %v", cerr)
+			vlog.Errorf("failed to close response body: %v", cerr)
 		}
 	}()
 
@@ -251,10 +251,10 @@ func (c *keaClient) buildHTTPClient() {
 			if pool.AppendCertsFromPEM(caPEM) {
 				tlsCfg.RootCAs = pool
 			} else {
-				vlog.Warn("failed to append CA certs from %s", c.CACertPath)
+				vlog.Warnf("failed to append CA certs from %s", c.CACertPath)
 			}
 		} else {
-			vlog.Warn("failed to read CA cert file %s: %v", c.CACertPath, err)
+			vlog.Warnf("failed to read CA cert file %s: %v", c.CACertPath, err)
 		}
 	}
 	if len(c.ClientCertPEM) > 0 && len(c.ClientKeyPEM) > 0 {

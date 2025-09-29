@@ -7,18 +7,21 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/main.go",
-      "env": {
-        "JSON_LOGGING": "false",
-        "LOG_LEVEL": "debug",
-        "KEA_URL": "https://localhost:8000",
-        "KEA_TLS_INSECURE": "true",
-        "KEA_TLS_ENABLED": "true",
-        "KEA_TLS_CA_FILE": "${workspaceFolder}/hack/docker/certs/ca.crt",
-        "KEA_TLS_CERT_FILE": "${workspaceFolder}/hack/docker/certs/tls.crt",
-        "KEA_TLS_KEY_FILE": "${workspaceFolder}/hack/docker/certs/tls.key",
-        "KEA_TLS_SERVER_NAME": "kea-dhcpv4-server.vitistack.io",
-        "KEA_TIMEOUT_SECONDS": "10"
-      }
+      "cwd": "${workspaceFolder}",
+      "debugAdapter": "dlv-dap"
+
+      // "env": {
+      //   "JSON_LOGGING": "false",
+      //   "LOG_LEVEL": "debug",
+      //   "KEA_URL": "https://localhost:8000",
+      //   "KEA_TLS_INSECURE": "true",
+      //   "KEA_TLS_ENABLED": "true",
+      //   "KEA_TLS_CA_FILE": "${workspaceFolder}/hack/docker/certs/ca.crt",
+      //   "KEA_TLS_CERT_FILE": "${workspaceFolder}/hack/docker/certs/tls.crt",
+      //   "KEA_TLS_KEY_FILE": "${workspaceFolder}/hack/docker/certs/tls.key",
+      //   "KEA_TLS_SERVER_NAME": "kea-dhcpv4-server.vitistack.io",
+      //   "KEA_TIMEOUT_SECONDS": "10"
+      // }
     },
     {
       "name": "Operator TLS (files)",
@@ -26,6 +29,8 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "debugAdapter": "dlv-dap",
       "env": {
         "JSON_LOGGING": "false",
         "LOG_LEVEL": "debug",
@@ -45,6 +50,8 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "debugAdapter": "dlv-dap",
       "env": {
         "JSON_LOGGING": "false",
         "LOG_LEVEL": "debug",
@@ -60,6 +67,7 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
       "debugAdapter": "dlv-dap",
       "env": {
         "JSON_LOGGING": "false",

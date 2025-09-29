@@ -6,7 +6,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.25.3
 	github.com/onsi/gomega v1.38.2
 	github.com/spf13/viper v1.21.0
-	github.com/vitistack/common v0.0.10
+	github.com/vitistack/common v0.0.11
 	github.com/vitistack/crds v0.1.5
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
@@ -68,6 +68,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect

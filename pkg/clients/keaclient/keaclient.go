@@ -40,7 +40,8 @@ type keaClient struct {
 	InsecureSkipVerify bool
 	ServerName         string
 
-	// Basic auth (mutually exclusive with client cert usage). If username provided and no cert/key provided, use basic auth.
+	// Basic auth (mutually exclusive with client cert usage).
+	// If username provided and no cert/key provided, use basic auth.
 	BasicAuthUsername string
 	BasicAuthPassword string
 

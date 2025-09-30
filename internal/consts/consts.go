@@ -18,4 +18,7 @@ const (
 	KEA_TLS_SECRET_NAME      = "KEA_TLS_SECRET_NAME"      // #nosec G101
 	KEA_TLS_SECRET_NAMESPACE = "KEA_TLS_SECRET_NAMESPACE" // #nosec G101
 	KEA_DISABLE_KEEPALIVES   = "KEA_DISABLE_KEEPALIVES"   // boolean; disable HTTP keep-alive reuse
+	// Basic auth credentials (optional) – if set and no client certs provided, basic auth will be used
+	KEA_BASIC_AUTH_USERNAME = "KEA_BASIC_AUTH_USERNAME"
+	KEA_BASIC_AUTH_PASSWORD = "KEA_BASIC_AUTH_PASSWORD" // #nosec G101 false positive – variable name only
 )

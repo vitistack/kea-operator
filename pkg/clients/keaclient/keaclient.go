@@ -40,6 +40,10 @@ type keaClient struct {
 	InsecureSkipVerify bool
 	ServerName         string
 
+	// Basic auth (mutually exclusive with client cert usage). If username provided and no cert/key provided, use basic auth.
+	BasicAuthUsername string
+	BasicAuthPassword string
+
 	// Direct PEM data (takes precedence over file paths if provided)
 	CACertPEM     []byte
 	ClientCertPEM []byte
@@ -122,13 +126,16 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if c.BasicAuthUsername != "" && c.ClientCertPath == "" && len(c.ClientCertPEM) == 0 {
+			req.SetBasicAuth(c.BasicAuthUsername, c.BasicAuthPassword)
+		}
 
 		resp, err := c.HttpClient.Do(req)
 		if err != nil {
 			if i == 0 && len(urls) > 1 {
-				vlog.Logger().Warn("Primary KEA server failed, trying secondary",
-					"primary", baseUrl,
-					"error", err.Error())
+				vlog.Logger().Warn("Primary KEA server failed, trying secondary ",
+					"primary: ", baseUrl,
+					"error: ", err.Error())
 			}
 			lastErr = fmt.Errorf("request failed for %s: %w", base, err)
 			continue
@@ -212,7 +219,7 @@ func (c *keaClient) parseResponse(data []byte) (keamodels.Response, error) {
 			pretty = buf.String()
 		}
 	}
-	vlog.Warn("unexpected Kea response payload", "body", pretty)
+	vlog.Warn("unexpected Kea response payload", " body", pretty)
 	return keamodels.Response{}, errors.New("unrecognized Kea response format")
 }
 
@@ -366,9 +373,9 @@ func (c *keaClient) loadClientCertWithFallback() *tls.Certificate {
 		}
 	}
 	vlog.Warn(
-		"no usable client certificate key pair found",
-		"primaryCert", c.ClientCertPath,
-		"primaryKey", c.ClientKeyPath,
+		"no usable client certificate key pair found ",
+		"primaryCert: ", c.ClientCertPath,
+		"primaryKey: ", c.ClientKeyPath,
 	)
 	return nil
 }

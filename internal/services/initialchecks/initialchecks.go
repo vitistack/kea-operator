@@ -56,7 +56,7 @@ func checkKea() bool {
 			return true
 		}
 		lastErr = err
-		vlog.Warn("kea connectivity attempt failed", "attempt", attempt, "error", err)
+		vlog.Warn("kea connectivity attempt failed ", "attempt: ", attempt, "error: ", err)
 		time.Sleep(backoff)
 	}
 

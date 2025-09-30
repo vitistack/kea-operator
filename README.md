@@ -103,6 +103,12 @@ Kea client
 - `KEA_TIMEOUT_SECONDS` (default 10)
 - `KEA_DISABLE_KEEPALIVES` (true/false)
 
+Authentication
+
+- Mutually exclusive options (basic auth is ignored if client certificate configured):
+  - Basic auth: `KEA_BASIC_AUTH_USERNAME`, `KEA_BASIC_AUTH_PASSWORD`
+  - mTLS client certificate: `KEA_TLS_CERT_FILE`, `KEA_TLS_KEY_FILE` (+ optional `KEA_TLS_CA_FILE`)
+
 TLS (optional)
 
 - `KEA_TLS_ENABLED` (true/false)

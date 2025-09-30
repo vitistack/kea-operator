@@ -113,11 +113,24 @@ func OptionTimeout(d time.Duration) KeaOption {
 	})
 }
 
+// OptionBasicAuth sets basic auth credentials (mutually exclusive with TLS client certificate auth).
+func OptionBasicAuth(username, password string) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		if username != "" {
+			cfg.BasicAuthUsername = username
+			cfg.BasicAuthPassword = password
+		}
+	})
+}
+
 // OptionFromEnv populates the client configuration from environment variables via Viper.
 // Supported env vars (see consts):
 //
 //	KEA_URL (full URL with scheme, e.g. https://host:port) or KEA_BASE_URL + optional KEA_PORT
 //	KEA_SECONDARY_URL (optional, for HA failover)
+//	KEA_BASE_URL (or KEA_HOST + optional KEA_PORT)
+//	KEA_SECONDARY_URL (optional, for HA failover)
+//	KEA_BASIC_AUTH_USERNAME, KEA_BASIC_AUTH_PASSWORD (optional, basic auth if no client certs)
 //	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
 //	KEA_TLS_INSECURE (true/false)
 //	KEA_TLS_SERVER_NAME
@@ -138,6 +151,8 @@ func OptionFromEnv() KeaOption {
 		_ = viper.BindEnv(consts.KEA_TLS_SERVER_NAME)
 		_ = viper.BindEnv(consts.KEA_TIMEOUT_SECONDS)
 		_ = viper.BindEnv(consts.KEA_DISABLE_KEEPALIVES)
+		_ = viper.BindEnv(consts.KEA_BASIC_AUTH_USERNAME)
+		_ = viper.BindEnv(consts.KEA_BASIC_AUTH_PASSWORD)
 
 		full := viper.GetString(consts.KEA_URL)
 		secondary := viper.GetString(consts.KEA_SECONDARY_URL)
@@ -153,6 +168,14 @@ func OptionFromEnv() KeaOption {
 		}
 		if port != "" {
 			cfg.Port = port
+		}
+
+		// Basic auth only if username present and no client certs explicitly configured
+		basicUser := viper.GetString(consts.KEA_BASIC_AUTH_USERNAME)
+		basicPass := viper.GetString(consts.KEA_BASIC_AUTH_PASSWORD)
+		if basicUser != "" && cfg.ClientCertPath == "" && len(cfg.ClientCertPEM) == 0 {
+			cfg.BasicAuthUsername = basicUser
+			cfg.BasicAuthPassword = basicPass
 		}
 		// TLS settings only if enabled (default disabled)
 		tlsEnabled := viper.GetBool(consts.KEA_TLS_ENABLED)

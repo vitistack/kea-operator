@@ -24,7 +24,8 @@ go.work.sum
 __debug_bin*
 
 # env file
-.env
+.env*
+!.env-example
 
 bin/
 

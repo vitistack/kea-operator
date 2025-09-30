@@ -3,7 +3,10 @@ kind: NetworkConfiguration
 metadata:
   name: test-networkconfiguration
 spec:
-  name: test
+  datacenterName: no-south-az1
+  namespaceName: test
+  provider: test-provider
+  clusterName: cluster-1
   networkInterfaces:
     - name: testeth1
       dhcpReserved: false

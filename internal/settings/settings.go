@@ -2,6 +2,7 @@ package settings
 
 import (
 	"github.com/spf13/viper"
+	"github.com/vitistack/common/pkg/loggers/vlog"
 	"github.com/vitistack/common/pkg/settings/dotenv"
 	"github.com/vitistack/kea-operator/internal/consts"
 )
@@ -25,7 +26,7 @@ func printEnvironmentSettings() {
 		consts.LOG_LEVEL,
 		consts.KEA_BASE_URL,
 		consts.KEA_URL,
-		consts.KEA_HOST,
+		consts.KEA_SECONDARY_URL,
 		consts.KEA_PORT,
 		consts.KEA_TLS_CA_FILE,
 		consts.KEA_TLS_CERT_FILE,
@@ -43,7 +44,7 @@ func printEnvironmentSettings() {
 		val := viper.Get(s)
 		if val != nil {
 			// #nosec G202
-			println(s + "=" + viper.GetString(s))
+			vlog.Debug(s + "=" + viper.GetString(s))
 		}
 	}
 }

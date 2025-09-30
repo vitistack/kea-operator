@@ -20,17 +20,18 @@ var (
 // InitializeClients initializes the global Kea client.
 // It prefers environment variables (see internal/consts/consts.go) and
 // falls back to in-cluster defaults if none are provided.
+// Supports HA configuration with KEA_URL (primary) and KEA_SECONDARY_URL (optional).
 func InitializeClients() {
-	// Base options (env first)
+	// Load environment variables
+	viper.AutomaticEnv()
+	_ = viper.BindEnv(consts.KEA_URL)
+	_ = viper.BindEnv(consts.KEA_SECONDARY_URL)
+	_ = viper.BindEnv(consts.KEA_PORT)
+	_ = viper.BindEnv(consts.KEA_TLS_SECRET_NAME)
+	_ = viper.BindEnv(consts.KEA_TLS_SECRET_NAMESPACE)
+
+	// Base options (env-based TLS, timeout, etc.)
 	baseOpts := []keaclient.KeaOption{keaclient.OptionFromEnv()}
-	host := viper.GetString(consts.KEA_HOST)
-	port := viper.GetString(consts.KEA_PORT)
-	if host != "" {
-		baseOpts = append(baseOpts, keaclient.OptionHost(host))
-	}
-	if port != "" {
-		baseOpts = append(baseOpts, keaclient.OptionPort(port))
-	}
 
 	// Attempt secret-based TLS if env specifies
 	secretName := viper.GetString(consts.KEA_TLS_SECRET_NAME)
@@ -53,6 +54,5 @@ func InitializeClients() {
 		}
 	}
 
-	// Fallback: env/file based only
 	KeaClient = keaclient.NewKeaClientWithOptions(baseOpts...)
 }

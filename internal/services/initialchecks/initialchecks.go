@@ -29,13 +29,11 @@ func InitialChecks() {
 }
 
 func checkKea() bool {
-	host := viper.GetString(consts.KEA_HOST)
-	port := viper.GetString(consts.KEA_PORT)
 	base := viper.GetString(consts.KEA_BASE_URL)
 	full := viper.GetString(consts.KEA_URL)
 
 	if clients.KeaClient == nil {
-		vlog.Error("Kea client not initialized; check configuration (KEA_HOST/PORT or KEA_URL)")
+		vlog.Error("Kea client not initialized; check configuration (KEA_URL or KEA_BASE_URL)")
 		os.Exit(1)
 		return true
 	}
@@ -47,7 +45,7 @@ func checkKea() bool {
 		backoff       = 2 * time.Second
 	)
 
-	vlog.Info("checking connectivity to Kea", "url", nonEmpty(full, base), "host", host, "port", port)
+	vlog.Info("checking connectivity to Kea", "url", nonEmpty(full, base))
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), perTryTimeout)

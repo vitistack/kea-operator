@@ -5,8 +5,8 @@ const (
 	LOG_LEVEL    = "LOG_LEVEL"
 
 	KEA_BASE_URL             = "KEA_BASE_URL"
-	KEA_URL                  = "KEA_URL" // full URL e.g. https://host:port (preferred)
-	KEA_HOST                 = "KEA_HOST"
+	KEA_URL                  = "KEA_URL"           // full URL e.g. https://host:port (preferred)
+	KEA_SECONDARY_URL        = "KEA_SECONDARY_URL" // secondary URL for HA failover (optional)
 	KEA_PORT                 = "KEA_PORT"
 	KEA_TLS_CA_FILE          = "KEA_TLS_CA_FILE"
 	KEA_TLS_CERT_FILE        = "KEA_TLS_CERT_FILE"

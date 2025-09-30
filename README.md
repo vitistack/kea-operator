@@ -31,6 +31,7 @@ Set one of the following (ordered by precedence):
 
 - `KEA_URL`: full URL, e.g. `http://localhost:8000`
 - or `KEA_BASE_URL`/`KEA_HOST` and optional `KEA_PORT` (default 8000)
+- `KEA_SECONDARY_URL` (optional): secondary URL for HA failover, e.g. `http://localhost:8001`
 
 3. Run the controller locally
 
@@ -97,6 +98,7 @@ Notes
 Kea client
 
 - `KEA_URL` (preferred) full URL, e.g. `http://localhost:8000`
+- `KEA_SECONDARY_URL` (optional) secondary URL for HA failover, e.g. `http://localhost:8001`
 - `KEA_BASE_URL` or `KEA_HOST` + `KEA_PORT`
 - `KEA_TIMEOUT_SECONDS` (default 10)
 - `KEA_DISABLE_KEEPALIVES` (true/false)

@@ -73,6 +73,16 @@ func OptionURL(fullURL string) KeaOption {
 	})
 }
 
+// OptionSecondaryURL sets a secondary URL for HA failover.
+func OptionSecondaryURL(fullURL string) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		if fullURL == "" {
+			return
+		}
+		cfg.SecondaryUrl = fullURL
+	})
+}
+
 // TLS and HTTP options
 func OptionTLS(caFile, certFile, keyFile string) KeaOption {
 	return optionFunc(func(cfg *keaClient) {
@@ -106,7 +116,8 @@ func OptionTimeout(d time.Duration) KeaOption {
 // OptionFromEnv populates the client configuration from environment variables via Viper.
 // Supported env vars (see consts):
 //
-//	KEA_BASE_URL (or KEA_HOST + optional KEA_PORT)
+//	KEA_URL (full URL with scheme, e.g. https://host:port) or KEA_BASE_URL + optional KEA_PORT
+//	KEA_SECONDARY_URL (optional, for HA failover)
 //	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
 //	KEA_TLS_INSECURE (true/false)
 //	KEA_TLS_SERVER_NAME
@@ -116,8 +127,8 @@ func OptionFromEnv() KeaOption {
 		viper.AutomaticEnv()
 		// Bind expected variables (ignore bind errors deliberately)
 		_ = viper.BindEnv(consts.KEA_URL)
+		_ = viper.BindEnv(consts.KEA_SECONDARY_URL)
 		_ = viper.BindEnv(consts.KEA_BASE_URL)
-		_ = viper.BindEnv(consts.KEA_HOST)
 		_ = viper.BindEnv(consts.KEA_PORT)
 		_ = viper.BindEnv(consts.KEA_TLS_ENABLED)
 		_ = viper.BindEnv(consts.KEA_TLS_CA_FILE)
@@ -129,16 +140,16 @@ func OptionFromEnv() KeaOption {
 		_ = viper.BindEnv(consts.KEA_DISABLE_KEEPALIVES)
 
 		full := viper.GetString(consts.KEA_URL)
+		secondary := viper.GetString(consts.KEA_SECONDARY_URL)
 		base := viper.GetString(consts.KEA_BASE_URL)
-		host := viper.GetString(consts.KEA_HOST)
 		port := viper.GetString(consts.KEA_PORT)
-		if base == "" && host != "" {
-			base = host
-		}
 		if full != "" {
 			cfg.BaseUrl = full // includes scheme
 		} else if base != "" {
 			cfg.BaseUrl = base
+		}
+		if secondary != "" {
+			cfg.SecondaryUrl = secondary
 		}
 		if port != "" {
 			cfg.Port = port

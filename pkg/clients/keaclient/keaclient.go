@@ -23,13 +23,15 @@ import (
 )
 
 type keaClient struct {
-	Context    context.Context
-	BaseUrl    string
-	Port       string
-	HttpClient *http.Client
+	Context      context.Context
+	BaseUrl      string
+	SecondaryUrl string // Optional secondary URL for HA failover
+	Port         string
+	HttpClient   *http.Client
 
 	lastConfigHash    string // simple hash to avoid rebuilding transport when unchanged
 	disableKeepAlives bool
+	currentUrl        string // Tracks which URL is currently active
 
 	// TLS options
 	CACertPath         string
@@ -88,35 +90,78 @@ func (kc *keaClient) applyDefaults() {
 func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.Response, error) {
 	// Ensure HTTP client is built (lazy) if config changed
 	c.buildHTTPClient()
-	base, err := c.buildBaseURL()
-	if err != nil {
-		return keamodels.Response{}, err
-	}
 
 	// Marshal the request exactly as provided (no double-encoding of command field)
 	body, err := json.Marshal(cmd)
 	if err != nil {
 		return keamodels.Response{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", base+"/", bytes.NewReader(body))
-	if err != nil {
-		return keamodels.Response{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HttpClient.Do(req)
-	if err != nil {
-		return keamodels.Response{}, err
-	}
-	defer func() {
-		if cerr := resp.Body.Close(); cerr != nil {
-			vlog.Errorf("failed to close response body: %v", cerr)
-		}
-	}()
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return keamodels.Response{}, err
+	// Try primary URL first, then secondary if available
+	urls := []string{c.BaseUrl}
+	if c.SecondaryUrl != "" {
+		urls = append(urls, c.SecondaryUrl)
 	}
+
+	var lastErr error
+	for i, baseUrl := range urls {
+		// Temporarily set BaseUrl for buildBaseURL
+		originalBase := c.BaseUrl
+		c.BaseUrl = baseUrl
+		base, err := c.buildBaseURL()
+		c.BaseUrl = originalBase // Restore original
+
+		if err != nil {
+			lastErr = fmt.Errorf("failed to build URL for %s: %w", baseUrl, err)
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", base+"/", bytes.NewReader(body))
+		if err != nil {
+			lastErr = fmt.Errorf("failed to create request for %s: %w", base, err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.HttpClient.Do(req)
+		if err != nil {
+			if i == 0 && len(urls) > 1 {
+				vlog.Logger().Warn("Primary KEA server failed, trying secondary",
+					"primary", baseUrl,
+					"error", err.Error())
+			}
+			lastErr = fmt.Errorf("request failed for %s: %w", base, err)
+			continue
+		}
+
+		defer func() {
+			if cerr := resp.Body.Close(); cerr != nil {
+				vlog.Errorf("failed to close response body: %v", cerr)
+			}
+		}()
+
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read response from %s: %w", base, err)
+			continue
+		}
+
+		// Log successful failover if we're using secondary
+		if i > 0 {
+			vlog.Logger().Info("Successfully failed over to secondary KEA server", "url", baseUrl)
+		}
+		c.currentUrl = baseUrl
+
+		// Parse response (existing logic)
+		return c.parseResponse(data)
+	}
+
+	// All URLs failed
+	return keamodels.Response{}, fmt.Errorf("all KEA servers failed: %w", lastErr)
+}
+
+// parseResponse handles the response parsing logic extracted from Send
+func (c *keaClient) parseResponse(data []byte) (keamodels.Response, error) {
 
 	// 1. Try plain array response: [ { result, text, ... } ]
 	var arr []keamodels.Response
@@ -331,7 +376,8 @@ func (c *keaClient) loadClientCertWithFallback() *tls.Certificate {
 // NewKeaClientFromEnv builds a Kea client using environment variables.
 // Supported env vars:
 //
-//	KEA_BASE_URL (preferred, e.g. https://kea.example:8000) or KEA_HOST and optional KEA_PORT
+//	KEA_URL (full URL with scheme, e.g. https://host:port) or KEA_BASE_URL + optional KEA_PORT
+//	KEA_SECONDARY_URL (optional, for HA failover)
 //	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
 //	KEA_TLS_INSECURE (true/false)
 //	KEA_TLS_SERVER_NAME

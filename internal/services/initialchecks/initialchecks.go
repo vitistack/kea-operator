@@ -8,11 +8,14 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/vitistack/common/pkg/clients/k8sclient"
 	"github.com/vitistack/common/pkg/loggers/vlog"
 	"github.com/vitistack/common/pkg/operator/crdcheck"
 	"github.com/vitistack/kea-operator/internal/clients"
 	"github.com/vitistack/kea-operator/internal/consts"
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // InitialChecks verifies connectivity to Kea DHCP at startup using the configured client (Viper-driven).
@@ -20,6 +23,32 @@ import (
 func InitialChecks() {
 	if !checkKea() {
 		os.Exit(1)
+	}
+
+	if k8sclient.Kubernetes == nil {
+		vlog.Error("Kubernetes client not initialized; check configuration")
+		os.Exit(1)
+	}
+
+	// fetch and print kubernetes
+	k8sserverversion, err := k8sclient.Kubernetes.ServerVersion()
+	if err != nil {
+		vlog.Error("failed to connect to Kubernetes API; check configuration", err)
+		os.Exit(1)
+	}
+
+	// print context info
+	vlog.Info("Kubernetes API connectivity OK, server version: " + k8sserverversion.String())
+	// print nodes info
+	nodes, err := k8sclient.Kubernetes.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		vlog.Error("failed to list Kubernetes nodes; check configuration", err)
+		os.Exit(1)
+	}
+	vlog.Info("Kubernetes nodes found: " + fmt.Sprintf("%d", len(nodes.Items)))
+	for i := range nodes.Items {
+		n := nodes.Items[i]
+		vlog.Info("Node name: " + n.Name)
 	}
 
 	crdcheck.MustEnsureInstalled(context.TODO(),

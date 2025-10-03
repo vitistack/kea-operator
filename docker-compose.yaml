@@ -1,6 +1,6 @@
 services:
   dhcp4:
-    image: jonasal/kea-dhcp4:3.1-alpine
+    image: jonasal/kea-dhcp4:3-alpine
     restart: unless-stopped
     ports:
       - 8000:8000

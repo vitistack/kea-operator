@@ -67,7 +67,7 @@ status:
 	ipv4Prefix: 10.123.0.0/24
 ```
 
-Add a NetworkConfiguration listing MAC addresses. The operator will look up each MAC’s current lease in Kea and create a reservation for that IP in the namespace’s subnet. The CRD requires identifiers like `clusterName`, `datacenterName`, `namespaceName`, and `provider` in `spec`.
+Add a NetworkConfiguration listing MAC addresses. The operator will look up each MAC’s current lease in Kea and create a reservation for that IP in the namespace’s subnet. The CRD requires identifiers like `clusterName`, `datacenterName`, `supervisorName`, and `provider` in `spec`.
 
 ```yaml
 apiVersion: vitistack.io/v1alpha1
@@ -78,7 +78,7 @@ metadata:
 spec:
   clusterName: example-cluster
   datacenterName: dc1
-  namespaceName: demo
+  supervisorName: demo
   provider: example
 	networkInterfaces:
 		- name: eth0

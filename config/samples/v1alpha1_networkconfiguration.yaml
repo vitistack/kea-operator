@@ -9,7 +9,7 @@ spec:
   # Required identifiers
   clusterName: example-cluster
   datacenterName: dc1
-  namespaceName: default
+  supervisorName: default
   provider: example
 
   # Optional: list of network interfaces; only macAddress is used by the operator today

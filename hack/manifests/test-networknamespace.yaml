@@ -4,7 +4,7 @@ metadata:
   name: test-networknamespace
 spec:
   datacenterName: no-west-az1
-  namespaceName: test
+  supervisorName: test
   clusterName: cluster-1
   provider: test-provider
   environment: dev

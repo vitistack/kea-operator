@@ -281,5 +281,7 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 			}
 		}
 	}
-	return "", 0, fmt.Errorf("no lease found for %s", mac)
+	// Not finding a lease is not necessarily an error - the machine might not have booted yet
+	// or the lease may have expired. Return empty values to let caller decide how to handle.
+	return "", 0, fmt.Errorf("no lease found for MAC %s", mac)
 }

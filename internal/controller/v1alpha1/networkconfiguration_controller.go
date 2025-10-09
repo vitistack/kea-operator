@@ -99,7 +99,9 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	} else {
 		// Handle deletion: best-effort cleanup then remove finalizer
 		if err := r.cleanupReservations(ctx, ncU); err != nil {
-			log.Error(err, "cleanup during deletion failed")
+			// Log at debug level since cleanup is best-effort and failures are expected
+			// when dependencies like NetworkNamespace are already deleted
+			log.V(1).Info("reservation cleanup during deletion encountered an issue", "error", err)
 		}
 		if err := viticommonfinalizers.Remove(ctx, r.Client, ncU, finalizerName); err != nil {
 			return reconcileutil.Requeue(err)
@@ -112,12 +114,14 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		_ = r.setCondition(ctx, ncU, viticommonconditions.New(
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", ncU.GetGeneration(),
 		))
+		_ = r.updateStatus(ctx, ncU, "Reconciling", "InProgress", "Reconciliation in progress", nil)
 	}
 
 	// 2) Fetch the NetworkNamespace in the same namespace to get ipv4_prefix
 	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, req.Namespace)
 	if err != nil {
 		log.Error(err, "failed to get NetworkNamespace ipv4_prefix", "namespace", req.Namespace)
+		_ = r.updateStatus(ctx, ncU, "Error", "Failed", fmt.Sprintf("NetworkNamespace not found: %v", err), nil)
 		// Requeue to retry later
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
@@ -126,6 +130,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	macs := extractMACsFromTypedNetworkConfiguration(nc)
 	if len(macs) == 0 {
 		log.Info("no MAC addresses found on NetworkConfiguration; skipping reservation", "name", nc.GetName(), "namespace", nc.GetNamespace())
+		_ = r.updateStatus(ctx, ncU, "Ready", "Success", "No MAC addresses to configure", nil)
 		// No error; just exit without requeue
 		return ctrl.Result{}, nil
 	}
@@ -138,6 +143,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		_ = r.setCondition(ctx, ncU, viticommonconditions.New(
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("resolve subnet: %v", err), ncU.GetGeneration(),
 		))
+		_ = r.updateStatus(ctx, ncU, "Error", "Failed", fmt.Sprintf("Subnet resolution failed: %v", err), nil)
 		// Do not hot-loop if command unsupported; just return without requeue (will reconcile on next event or resync)
 		if strings.Contains(txt, "unsupported kea command") || strings.Contains(txt, "not supported") {
 			return ctrl.Result{}, nil
@@ -146,50 +152,93 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	// 5) For each MAC, require an existing lease in Kea; use its IP to create a reservation.
+	// 5) For each MAC, create a reservation. First check for existing lease to reuse the IP,
+	// otherwise create MAC-only reservation (KEA will auto-allocate IP from pool).
 	var errs []string
 	var ipnet *net.IPNet
 	if _, n, e := net.ParseCIDR(strings.TrimSpace(ipv4Prefix)); e == nil {
 		ipnet = n
 	}
+
+	// Build a map of MAC to resolved IP for status update
+	macToIP := make(map[string]string)
+
 	for _, mac := range macs {
-		ip, leaseSubnetID, lerr := r.Kea.GetLeaseIPv4ForMAC(ctx, mac)
-		if lerr != nil || ip == "" {
-			if lerr != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", mac, lerr))
-			} else {
-				errs = append(errs, fmt.Sprintf("%s: no lease found", mac))
-			}
-			continue
-		}
-		// Optional safety: ensure lease IP is within the namespace prefix
-		if ipnet != nil {
-			if p := net.ParseIP(ip); p == nil || p.To4() == nil || !ipnet.Contains(p) {
-				errs = append(errs, fmt.Sprintf("%s: lease IP %s not within %s", mac, ip, ipv4Prefix))
-				continue
-			}
-		}
-		// Prefer Kea's reported subnet-id if present, else use resolved subnetID
+		// Try to get existing lease/reservation to reuse the IP
+		ip, leaseSubnetID, _ := r.Kea.GetLeaseIPv4ForMAC(ctx, mac)
+
+		// Determine subnet ID (prefer from lease if available)
 		sid := subnetID
 		if leaseSubnetID > 0 {
 			sid = leaseSubnetID
 		}
+
+		// If we have a lease IP, validate it's in the expected subnet
+		if ip != "" && ipnet != nil {
+			if p := net.ParseIP(ip); p == nil || p.To4() == nil || !ipnet.Contains(p) {
+				log.Info("lease IP not within expected prefix, will create MAC-only reservation",
+					"mac", mac, "leaseIP", ip, "expectedPrefix", ipv4Prefix)
+				ip = "" // Clear IP to create MAC-only reservation
+			}
+		}
+
+		// Create or ensure reservation (with IP if available, MAC-only otherwise)
 		if err := r.Kea.EnsureReservationForMACIP(ctx, mac, sid, ip); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", mac, err))
 			continue
 		}
+
+		// Store successful MAC -> IP mapping (if we have an IP)
+		if ip != "" {
+			macToIP[mac] = ip
+		} else {
+			log.Info("created MAC-only reservation, IP will be auto-allocated on DHCP request", "mac", mac)
+		}
 	}
+
+	// Build network interfaces for status with resolved IPs
+	statusInterfaces := make([]vitistackcrdsv1alpha1.NetworkConfigurationInterface, 0, len(nc.Spec.NetworkInterfaces))
+	for _, iface := range nc.Spec.NetworkInterfaces {
+		statusIface := vitistackcrdsv1alpha1.NetworkConfigurationInterface{
+			Name:       iface.Name,
+			MacAddress: iface.MacAddress,
+			Vlan:       iface.Vlan,
+		}
+		// Add resolved IP if we have it (from existing lease/reservation)
+		if ip, ok := macToIP[strings.ToLower(strings.TrimSpace(strings.ReplaceAll(iface.MacAddress, "-", ":")))]; ok {
+			statusIface.IPv4Addresses = []string{ip}
+			statusIface.IPv4Subnet = ipv4Prefix
+		}
+		statusInterfaces = append(statusInterfaces, statusIface)
+	}
+
+	// Handle errors
 	if len(errs) > 0 {
+		// Errors creating reservations - set error state
 		_ = r.setCondition(ctx, ncU, viticommonconditions.New(
-			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("lease/reservation errors: %s", strings.Join(errs, "; ")), ncU.GetGeneration(),
+			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("reservation errors: %s", strings.Join(errs, "; ")), ncU.GetGeneration(),
 		))
+		_ = r.updateStatus(ctx, ncU, "Error", "Failed", strings.Join(errs, "; "), statusInterfaces)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Success: set Ready True
+	// Success: all MAC reservations created (IPs will be allocated on DHCP request if not already assigned)
+	totalMACs := len(macs)
+	resolvedIPs := len(macToIP)
+
+	var statusMsg string
+	if resolvedIPs == totalMACs {
+		statusMsg = fmt.Sprintf("All %d MAC reservations configured with assigned IPs", totalMACs)
+	} else if resolvedIPs > 0 {
+		statusMsg = fmt.Sprintf("%d MAC reservations configured (%d with IPs, %d will get IPs on DHCP request)", totalMACs, resolvedIPs, totalMACs-resolvedIPs)
+	} else {
+		statusMsg = fmt.Sprintf("All %d MAC reservations configured (IPs will be auto-allocated on DHCP request)", totalMACs)
+	}
+
 	_ = r.setCondition(ctx, ncU, viticommonconditions.New(
 		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", ncU.GetGeneration(),
 	))
+	_ = r.updateStatus(ctx, ncU, "Ready", "Success", statusMsg, statusInterfaces)
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
@@ -287,11 +336,18 @@ func extractMACsFromTypedNetworkConfiguration(networkconf *vitistackcrdsv1alpha1
 func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, ncU *unstructured.Unstructured) error {
 	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, ncU.GetNamespace())
 	if err != nil {
-		return err
+		// If NetworkNamespace is not found, it may have been deleted already.
+		// In that case, KEA won't have the subnet configuration anyway, so skip cleanup.
+		vlog.Debug("skipping reservation cleanup, NetworkNamespace not available",
+			"namespace", ncU.GetNamespace(), "error", err)
+		return nil
 	}
 	subnetID, err := r.Kea.GetSubnetID(ctx, ipv4Prefix)
 	if err != nil {
-		return err
+		// If subnet not found in KEA, nothing to clean up
+		vlog.Debug("skipping reservation cleanup, subnet not found in KEA",
+			"ipv4Prefix", ipv4Prefix, "error", err)
+		return nil
 	}
 	// Convert to typed NC to extract MACs strictly
 	networkconf, convErr := unstructuredconv.ToNetworkConfiguration(ncU)
@@ -389,4 +445,44 @@ func getReadyCondition(nc *unstructured.Unstructured) *metav1.Condition {
 		}
 	}
 	return nil
+}
+
+// updateStatus updates the full status subresource including phase, status, message,
+// created timestamp, and network interfaces with their resolved IPs.
+func (r *NetworkConfigurationReconciler) updateStatus(ctx context.Context, ncU *unstructured.Unstructured, phase, status, message string, networkInterfaces []vitistackcrdsv1alpha1.NetworkConfigurationInterface) error {
+	base := ncU.DeepCopy()
+
+	// Set phase, status, and message
+	if phase != "" {
+		_ = unstructured.SetNestedField(ncU.Object, phase, "status", "phase")
+	}
+	if status != "" {
+		_ = unstructured.SetNestedField(ncU.Object, status, "status", "status")
+	}
+	if message != "" {
+		_ = unstructured.SetNestedField(ncU.Object, message, "status", "message")
+	}
+
+	// Set created timestamp if not already set
+	created, found, _ := unstructured.NestedString(ncU.Object, "status", "created")
+	if !found || created == "" {
+		now := metav1.Now()
+		// Format as RFC3339 timestamp string for proper serialization
+		_ = unstructured.SetNestedField(ncU.Object, now.Format(time.RFC3339), "status", "created")
+	}
+
+	// Set network interfaces if provided
+	if len(networkInterfaces) > 0 {
+		interfacesSlice := make([]any, 0, len(networkInterfaces))
+		for _, iface := range networkInterfaces {
+			ifaceMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&iface)
+			if err != nil {
+				continue
+			}
+			interfacesSlice = append(interfacesSlice, ifaceMap)
+		}
+		_ = unstructured.SetNestedSlice(ncU.Object, interfacesSlice, "status", "networkInterfaces")
+	}
+
+	return r.Status().Patch(ctx, ncU, client.MergeFrom(base))
 }

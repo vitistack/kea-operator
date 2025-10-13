@@ -340,20 +340,20 @@ func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context
 		// In that case, KEA won't have the subnet configuration anyway, so skip cleanup.
 		vlog.Debug("skipping reservation cleanup, NetworkNamespace not available",
 			"namespace", ncU.GetNamespace(), "error", err)
-		return nil
+		return err
 	}
 	subnetID, err := r.Kea.GetSubnetID(ctx, ipv4Prefix)
 	if err != nil {
 		// If subnet not found in KEA, nothing to clean up
 		vlog.Debug("skipping reservation cleanup, subnet not found in KEA",
 			"ipv4Prefix", ipv4Prefix, "error", err)
-		return nil
+		return err
 	}
 	// Convert to typed NC to extract MACs strictly
 	networkconf, convErr := unstructuredconv.ToNetworkConfiguration(ncU)
 	if convErr != nil {
 		vlog.Debug("failed to convert to typed NetworkConfiguration during cleanup", "error", convErr)
-		return nil
+		return convErr
 	}
 	macs := extractMACsFromTypedNetworkConfiguration(networkconf)
 	for _, mac := range macs {

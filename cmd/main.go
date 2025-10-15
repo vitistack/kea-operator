@@ -21,10 +21,12 @@ import (
 	"flag"
 	"os"
 
+	"github.com/spf13/viper"
 	"github.com/vitistack/common/pkg/clients/k8sclient"
 	"github.com/vitistack/common/pkg/loggers/vlog"
 	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
 	"github.com/vitistack/kea-operator/internal/clients"
+	"github.com/vitistack/kea-operator/internal/consts"
 	"github.com/vitistack/kea-operator/internal/services/initialchecks"
 
 	// +kubebuilder:scaffold:imports
@@ -87,12 +89,19 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	opts := zap.Options{
-		Development: true,
+		Development: viper.GetBool(consts.DEVELOPMENT),
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	_ = vlog.Setup(vlog.Options{Level: "info", ColorizeLine: true, AddCaller: true})
+	_ = vlog.Setup(vlog.Options{
+		Level:             viper.GetString(consts.LOG_LEVEL),
+		ColorizeLine:      viper.GetBool(consts.LOG_COLORIZE),
+		AddCaller:         viper.GetBool(consts.LOG_ADD_CALLER),
+		JSON:              viper.GetBool(consts.LOG_JSON_LOGGING),
+		DisableStacktrace: viper.GetBool(consts.LOG_DISABLE_STACKTRANCE),
+		UnescapeMultiline: viper.GetBool(consts.LOG_UNESCAPE_MULTILINE),
+	})
 	defer func() {
 		_ = vlog.Sync()
 	}()
@@ -104,6 +113,8 @@ func main() {
 	clients.InitializeClients()
 
 	initialchecks.InitialChecks()
+
+	vlog.Info("testings")
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will

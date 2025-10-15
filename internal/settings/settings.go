@@ -8,8 +8,13 @@ import (
 )
 
 func Init() {
-	viper.SetDefault(consts.JSON_LOGGING, true)
+	viper.SetDefault(consts.LOG_JSON_LOGGING, true)
 	viper.SetDefault(consts.LOG_LEVEL, "info")
+	viper.SetDefault(consts.LOG_COLORIZE, false)
+	viper.SetDefault(consts.LOG_ADD_CALLER, true)
+	viper.SetDefault(consts.LOG_DISABLE_STACKTRANCE, false)
+	viper.SetDefault(consts.LOG_UNESCAPE_MULTILINE, false)
+	viper.SetDefault(consts.DEVELOPMENT, false)
 	viper.SetDefault(consts.KEA_DISABLE_KEEPALIVES, true)
 
 	dotenv.LoadDotEnv()
@@ -22,7 +27,12 @@ func Init() {
 
 func printEnvironmentSettings() {
 	settings := []string{
-		consts.JSON_LOGGING,
+		consts.LOG_JSON_LOGGING,
+		consts.LOG_COLORIZE,
+		consts.LOG_ADD_CALLER,
+		consts.LOG_DISABLE_STACKTRANCE,
+		consts.LOG_UNESCAPE_MULTILINE,
+		consts.DEVELOPMENT,
 		consts.LOG_LEVEL,
 		consts.KEA_BASE_URL,
 		consts.KEA_URL,

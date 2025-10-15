@@ -1,8 +1,13 @@
 package consts
 
 const (
-	JSON_LOGGING = "JSON_LOGGING"
-	LOG_LEVEL    = "LOG_LEVEL"
+	DEVELOPMENT             = "DEVELOPMENT"
+	LOG_JSON_LOGGING        = "LOG_JSON_LOGGING"
+	LOG_LEVEL               = "LOG_LEVEL"
+	LOG_COLORIZE            = "LOG_COLORIZE"
+	LOG_ADD_CALLER          = "LOG_ADD_CALLER"
+	LOG_DISABLE_STACKTRANCE = "LOG_DISABLE_STACKTRANCE"
+	LOG_UNESCAPE_MULTILINE  = "LOG_UNESCAPE_MULTILINE"
 
 	KEA_BASE_URL             = "KEA_BASE_URL"
 	KEA_URL                  = "KEA_URL"           // full URL e.g. https://host:port (preferred)

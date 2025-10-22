@@ -3,13 +3,16 @@ kind: NetworkNamespace
 metadata:
   name: test-networknamespace
 spec:
-  datacenterName: no-west-az1
-  supervisorName: test
-  clusterName: cluster-1
+  datacenterIdentifier: no-west-az1
+  supervisorIdentifier: test
+  clusterIdentifier: cluster-1
   provider: test-provider
   environment: dev
 status:
-  name: test
+  datacenterIdentifier: no-west-az1
+  supervisorIdentifier: test
+  clusterIdentifier: cluster-1
+  namespaceId: ns-12345
   ipv4Prefix: 10.123.0.0/24
   ipv4EgressIp: 10.123.0.1
   ipv6Prefix: fd00:100:64::/64

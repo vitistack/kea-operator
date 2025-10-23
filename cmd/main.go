@@ -94,14 +94,15 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	_ = vlog.Setup(vlog.Options{
+	vlogsetup := vlog.Options{
 		Level:             viper.GetString(consts.LOG_LEVEL),
 		ColorizeLine:      viper.GetBool(consts.LOG_COLORIZE),
 		AddCaller:         viper.GetBool(consts.LOG_ADD_CALLER),
 		JSON:              viper.GetBool(consts.LOG_JSON_LOGGING),
 		DisableStacktrace: viper.GetBool(consts.LOG_DISABLE_STACKTRANCE),
 		UnescapeMultiline: viper.GetBool(consts.LOG_UNESCAPE_MULTILINE),
-	})
+	}
+	_ = vlog.Setup(vlogsetup)
 	defer func() {
 		_ = vlog.Sync()
 	}()

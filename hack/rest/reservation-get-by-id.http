@@ -5,7 +5,7 @@
 @certPath = {{$dotenv KEA_TLS_CERT_FILE}}
 @keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
 @caPath = {{$dotenv KEA_TLS_CA_FILE}}
-
+@header = {{$dotenv KEA_HEADER}}
 // Get reservation by hardware address
 
 ### Reservation Get By Id (localhost with certs)

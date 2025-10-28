@@ -1,10 +1,31 @@
-POST https://localhost:8000/
-Content-Type: application/json
-cert: hack/docker/certs/client.crt
-key: hack/docker/certs/client.key
-ca: hack/docker/certs/ca.crt
+@baseUrl = {{$dotenv KEA_URL}}
+@port = {{$dotenv KEA_PORT}}
+@username = {{$dotenv KEA_BASIC_AUTH_USERNAME}}
+@password = {{$dotenv KEA_BASIC_AUTH_PASSWORD}}
+@certPath = {{$dotenv KEA_TLS_CERT_FILE}}
+@keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
+@caPath = {{$dotenv KEA_TLS_CA_FILE}}
+@header = {{$dotenv KEA_HEADER}}
 
 // Write the current configuration to disk
+
+### Config Write (localhost with certs)
+# @name configWriteDev
+POST {{baseUrl}}:{{port}}/
+{{header}}
+cert: {{certPath}}
+key: {{keyPath}}
+ca: {{caPath}}
+
+{
+    "command": "config-write"
+}
+
+### Config Write (test with basic auth)
+# @name configWriteTest
+POST {{baseUrl}}:{{port}}/
+{{header}}
+Authorization: Basic {{username}}:{{password}}
 
 {
     "command": "config-write"

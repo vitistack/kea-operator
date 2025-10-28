@@ -1,8 +1,11 @@
-POST https://localhost:8000/
-Content-Type: application/json
-cert: hack/docker/certs/client.crt
-key: hack/docker/certs/client.key
-ca: hack/docker/certs/ca.crt
+@baseUrl = {{$dotenv KEA_URL}}
+@port = {{$dotenv KEA_PORT}}
+@username = {{$dotenv KEA_BASIC_AUTH_USERNAME}}
+@password = {{$dotenv KEA_BASIC_AUTH_PASSWORD}}
+@certPath = {{$dotenv KEA_TLS_CERT_FILE}}
+@keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
+@caPath = {{$dotenv KEA_TLS_CA_FILE}}
+@header = {{$dotenv KEA_HEADER}}
 
 // Add a reservation to subnet
 // The operation-target parameter accepts the following values:
@@ -10,8 +13,32 @@ ca: hack/docker/certs/ca.crt
 // * database - query or update host database(s)
 // * all - query or update both runtime configuration and host database(s)
 // * default - query or update a default host data source - it is command-specific
-
 // Make reservation without specifying IP address, let server assign it! Please verify behavior in your environment!
+
+### Reservation Add Mac Only (localhost with certs)
+# @name reservationAddMacOnlyDev
+POST {{baseUrl}}:{{port}}/
+{{header}}
+cert: {{certPath}}
+key: {{keyPath}}
+ca: {{caPath}}
+
+{
+    "command": "reservation-add",
+    "arguments": {
+        "reservation": {
+            "subnet-id": 1,
+            "hw-address": "1a:1b:1c:1d:1e:2f"
+        },
+        "operation-target": "all"
+    }
+}
+
+### Reservation Add Mac Only (test with basic auth)
+# @name reservationAddMacOnlyTest
+POST {{baseUrl}}:{{port}}/
+{{header}}
+Authorization: Basic {{username}}:{{password}}
 
 {
     "command": "reservation-add",

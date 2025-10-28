@@ -1,17 +1,40 @@
-POST https://localhost:8000/
-Content-Type: application/json
-cert: hack/docker/certs/client.crt
-key: hack/docker/certs/client.key
-ca: hack/docker/certs/ca.crt
+@baseUrl = {{$dotenv KEA_URL}}
+@port = {{$dotenv KEA_PORT}}
+@username = {{$dotenv KEA_BASIC_AUTH_USERNAME}}
+@password = {{$dotenv KEA_BASIC_AUTH_PASSWORD}}
+@certPath = {{$dotenv KEA_TLS_CERT_FILE}}
+@keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
+@caPath = {{$dotenv KEA_TLS_CA_FILE}}
+@header = {{$dotenv KEA_HEADER}}
 
-// Get reservation by ip address
-// As reservation-add is expected to store the host, the hosts-databases parameter must be specified in the configuration, 
-// and databases must not run in read-only mode.
+### Get reservation by IP address (localhost with certs)
+# @name getReservationByAddressDev
+# As reservation-add is expected to store the host, the hosts-databases parameter must be specified in the configuration, 
+# and databases must not run in read-only mode.
+POST {{baseUrl}}:{{port}}/
+{{header}}
+cert: {{certPath}}
+key: {{keyPath}}
+ca: {{caPath}}
 
 {
     "command": "reservation-get-by-address",
     "arguments": {
-    "ip-address": "10.123.0.97",
+        "ip-address": "10.123.0.97",
+        "subnet-id": 1
+    }
+}
+
+### Get reservation by IP address (test with basic auth)
+# @name getReservationByAddressTest
+POST {{baseUrl}}:{{port}}/
+{{header}}
+Authorization: Basic {{username}}:{{password}}
+
+{
+    "command": "reservation-get-by-address",
+    "arguments": {
+        "ip-address": "10.123.0.97",
         "subnet-id": 1
     }
 }

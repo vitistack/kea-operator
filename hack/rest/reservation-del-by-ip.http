@@ -1,8 +1,11 @@
-POST https://localhost:8000/
-Content-Type: application/json
-cert: hack/docker/certs/client.crt
-key: hack/docker/certs/client.key
-ca: hack/docker/certs/ca.crt
+@baseUrl = {{$dotenv KEA_URL}}
+@port = {{$dotenv KEA_PORT}}
+@username = {{$dotenv KEA_BASIC_AUTH_USERNAME}}
+@password = {{$dotenv KEA_BASIC_AUTH_PASSWORD}}
+@certPath = {{$dotenv KEA_TLS_CERT_FILE}}
+@keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
+@caPath = {{$dotenv KEA_TLS_CA_FILE}}
+@header = {{$dotenv KEA_HEADER}}
 
 // Add a reservation to subnet
 // The operation-target parameter accepts the following values:
@@ -10,9 +13,30 @@ ca: hack/docker/certs/ca.crt
 // * database - query or update host database(s)
 // * all - query or update both runtime configuration and host database(s)
 // * default - query or update a default host data source - it is command-specific
-
-
 // Delete reservation by IP address
+
+### Reservation Del By Ip (localhost with certs)
+# @name reservationDelByIpDev
+POST {{baseUrl}}:{{port}}/
+{{header}}
+cert: {{certPath}}
+key: {{keyPath}}
+ca: {{caPath}}
+
+{
+    "command": "reservation-del",
+    "arguments": {
+        "subnet-id": 1,
+    "ip-address": "10.123.0.4",
+        "operation-target": "all"
+    }
+}
+
+### Reservation Del By Ip (test with basic auth)
+# @name reservationDelByIpTest
+POST {{baseUrl}}:{{port}}/
+{{header}}
+Authorization: Basic {{username}}:{{password}}
 
 {
     "command": "reservation-del",

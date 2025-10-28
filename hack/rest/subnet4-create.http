@@ -1,8 +1,50 @@
-POST https://localhost:8000/
-Content-Type: application/json
-cert: hack/docker/certs/client.crt
-key: hack/docker/certs/client.key
-ca: hack/docker/certs/ca.crt
+@baseUrl = {{$dotenv KEA_URL}}
+@port = {{$dotenv KEA_PORT}}
+@username = {{$dotenv KEA_BASIC_AUTH_USERNAME}}
+@password = {{$dotenv KEA_BASIC_AUTH_PASSWORD}}
+@certPath = {{$dotenv KEA_TLS_CERT_FILE}}
+@keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
+@caPath = {{$dotenv KEA_TLS_CA_FILE}}
+@header = {{$dotenv KEA_HEADER}}
+
+### Subnet4 Create (localhost with certs)
+# @name subnet4CreateDev
+POST {{baseUrl}}:{{port}}/
+{{header}}
+cert: {{certPath}}
+key: {{keyPath}}
+ca: {{caPath}}
+
+{
+    "command": "subnet4-add",
+    "arguments": {
+        "subnet4": [ {
+            "id": 2,
+            "subnet": "10.123.1.0/24",
+            "option-data": [
+                { "name": "routers",
+                  "data": "10.123.1.1"
+               }
+            ],
+            "pools": [
+                {
+                  "pool": "10.123.1.4-10.123.1.254",
+                  "require-client-classes": [
+                  "biosclients",
+                  "ueficlients",
+                  "ipxeclients"
+                  ]
+                }
+            ]
+        } ]
+    }
+}
+
+### Subnet4 Create (test with basic auth)
+# @name subnet4CreateTest
+POST {{baseUrl}}:{{port}}/
+{{header}}
+Authorization: Basic {{username}}:{{password}}
 
 {
     "command": "subnet4-add",

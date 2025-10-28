@@ -1,10 +1,22 @@
-POST https://localhost:8000/
-Content-Type: application/json
-cert: hack/docker/certs/client.crt
-key: hack/docker/certs/client.key
-ca: hack/docker/certs/ca.crt
+@baseUrl = {{$dotenv KEA_URL}}
+@port = {{$dotenv KEA_PORT}}
+@username = {{$dotenv KEA_BASIC_AUTH_USERNAME}}
+@password = {{$dotenv KEA_BASIC_AUTH_PASSWORD}}
+@certPath = {{$dotenv KEA_TLS_CERT_FILE}}
+@keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
+@caPath = {{$dotenv KEA_TLS_CA_FILE}}
+@header = {{$dotenv KEA_HEADER}}
 
 // Get reservation by mac-address
+// Get reservation by ip-address
+
+### Reservation Get (localhost with certs)
+# @name reservationGetDev
+POST {{baseUrl}}:{{port}}/
+{{header}}
+cert: {{certPath}}
+key: {{keyPath}}
+ca: {{caPath}}
 
 {
     "command": "reservation-get",
@@ -15,7 +27,30 @@ ca: hack/docker/certs/ca.crt
     }
 }
 
-// Get reservation by ip-address
+
+# {
+#     "command": "reservation-get",
+#     "arguments": {
+#         "subnet-id": 1,
+#         "ip-address": "10.123.0.97"
+#     }
+# }
+
+### Reservation Get (test with basic auth)
+# @name reservationGetTest
+POST {{baseUrl}}:{{port}}/
+{{header}}
+Authorization: Basic {{username}}:{{password}}
+
+{
+    "command": "reservation-get",
+    "arguments": {
+        "subnet-id": 1,
+        "identifier-type": "hw-address",
+        "identifier": "f4:03:43:ea:eb:10"
+    }
+}
+
 
 # {
 #     "command": "reservation-get",

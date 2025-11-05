@@ -1,13 +1,13 @@
 module github.com/vitistack/kea-operator
 
-go 1.25.2
+go 1.25.3
 
 require (
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	github.com/spf13/viper v1.21.0
-	github.com/vitistack/common v0.0.21
-	github.com/vitistack/crds v0.3.3
+	github.com/vitistack/common v0.0.22
+	github.com/vitistack/crds v0.3.4
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
 	sigs.k8s.io/controller-runtime v0.22.4

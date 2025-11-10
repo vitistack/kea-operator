@@ -6,8 +6,8 @@ require (
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	github.com/spf13/viper v1.21.0
-	github.com/vitistack/common v0.0.22
-	github.com/vitistack/crds v0.3.4
+	github.com/vitistack/common v0.0.23
+	github.com/vitistack/crds v0.3.5
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
 	sigs.k8s.io/controller-runtime v0.22.4

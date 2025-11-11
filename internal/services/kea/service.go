@@ -41,16 +41,141 @@ func (s *Service) GetSubnetID(ctx context.Context, ipv4Prefix string) (int, erro
 		if !ok {
 			continue
 		}
-		if sub, ok := m["subnet"].(string); ok && sub == ipv4Prefix {
+
+		// Extract subnet string - handle both direct string and pointer to interface containing string
+		var subnetStr string
+		switch subVal := m["subnet"].(type) {
+		case string:
+			subnetStr = subVal
+		case *any:
+			if subVal != nil {
+				if str, ok := (*subVal).(string); ok {
+					subnetStr = str
+				}
+			}
+		}
+
+		if subnetStr == ipv4Prefix {
+			// Extract ID - handle both numeric types and pointer to interface
 			switch idv := m["id"].(type) {
 			case float64:
 				return int(idv), nil
 			case int:
 				return idv, nil
+			case *any:
+				if idv != nil {
+					switch id := (*idv).(type) {
+					case float64:
+						return int(id), nil
+					case int:
+						return id, nil
+					}
+				}
 			}
 		}
 	}
 	return 0, fmt.Errorf("no matching Kea subnet for prefix %s", ipv4Prefix)
+}
+
+// SubnetInfo contains details about a Kea subnet
+type SubnetInfo struct {
+	ID      int
+	Subnet  string
+	Gateway string
+	DNS     []string
+}
+
+// GetSubnetInfo retrieves detailed subnet information including gateway and DNS servers
+func (s *Service) GetSubnetInfo(ctx context.Context, subnetID int) (*SubnetInfo, error) {
+	req := keamodels.Request{
+		Command: "subnet4-get",
+		Args:    map[string]any{"id": subnetID},
+	}
+	resp, err := s.Client.Send(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Result != 0 {
+		return nil, fmt.Errorf("kea subnet4-get failed: %s", resp.Text)
+	}
+
+	// subnet4-get returns "subnet4" key, not "subnets"
+	subnet4List, ok := resp.Arguments["subnet4"].([]any)
+	if !ok || len(subnet4List) == 0 {
+		return nil, fmt.Errorf("unexpected subnet4-get response shape")
+	}
+
+	subnetData, ok := subnet4List[0].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected subnet data format")
+	}
+
+	info := &SubnetInfo{ID: subnetID}
+
+	// Extract subnet CIDR
+	if subnet, ok := subnetData["subnet"].(string); ok {
+		info.Subnet = subnet
+	} else if subnetPtr, ok := subnetData["subnet"].(*any); ok && subnetPtr != nil {
+		if str, ok := (*subnetPtr).(string); ok {
+			info.Subnet = str
+		}
+	}
+
+	// Extract option-data for gateway (router) and DNS
+	if optionData, ok := subnetData["option-data"].([]any); ok {
+		for _, opt := range optionData {
+			optMap, ok := opt.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			var code float64
+			var data string
+
+			// Extract code
+			switch c := optMap["code"].(type) {
+			case float64:
+				code = c
+			case int:
+				code = float64(c)
+			case *any:
+				if c != nil {
+					if f, ok := (*c).(float64); ok {
+						code = f
+					} else if i, ok := (*c).(int); ok {
+						code = float64(i)
+					}
+				}
+			}
+
+			// Extract data
+			switch d := optMap["data"].(type) {
+			case string:
+				data = d
+			case *any:
+				if d != nil {
+					if str, ok := (*d).(string); ok {
+						data = str
+					}
+				}
+			}
+
+			// Code 3 = router (gateway), Code 6 = DNS servers
+			if code == 3 && data != "" {
+				info.Gateway = data
+			} else if code == 6 && data != "" {
+				// DNS can be comma-separated
+				for _, dns := range strings.Split(data, ",") {
+					dns = strings.TrimSpace(dns)
+					if dns != "" {
+						info.DNS = append(info.DNS, dns)
+					}
+				}
+			}
+		}
+	}
+
+	return info, nil
 }
 
 // DeleteReservationForMAC removes a reservation for the given MAC and subnet.

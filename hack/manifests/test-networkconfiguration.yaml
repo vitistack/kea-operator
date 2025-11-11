@@ -3,11 +3,12 @@ kind: NetworkConfiguration
 metadata:
   name: test-networkconfiguration
 spec:
-  datacenterIdentifier: no-south-az1
-  supervisorIdentifier: test
-  provider: test-provider
-  clusterIdentifier: cluster-1
   name: test-networkconfiguration
+  description: "Test Network Configuration"
+  datacenterIdentifier: test-south-az1
+  supervisorIdentifier: test-viti
+  clusterIdentifier: test-cluster
+  provider: test-provider
   networkInterfaces:
     - name: testeth1
       dhcpReserved: false

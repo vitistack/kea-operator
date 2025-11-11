@@ -9,9 +9,9 @@ spec:
   provider: test-provider
   environment: dev
 status:
-  datacenterIdentifier: no-west-az1
-  supervisorIdentifier: test
-  clusterIdentifier: cluster-1
+  datacenterIdentifier: test-south-az1
+  supervisorIdentifier: test-viti
+  clusterIdentifier: test-cluster
   namespaceId: ns-12345
   ipv4Prefix: 10.123.0.0/24
   ipv4EgressIp: 10.123.0.1
@@ -22,4 +22,4 @@ status:
   status: ""
   message: ""
   associatedKubernetesClusterIds:
-    - cluster-1
+    - test-cluster

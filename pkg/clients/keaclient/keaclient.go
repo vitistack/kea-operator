@@ -184,7 +184,15 @@ func (c *keaClient) parseResponse(data []byte) (keamodels.Response, error) {
 	}
 	var arrLax []laxResponse
 	if err := json.Unmarshal(data, &arrLax); err == nil && len(arrLax) > 0 {
-		return keamodels.Response{Result: arrLax[0].Result, Text: arrLax[0].Text}, nil
+		resp := keamodels.Response{Result: arrLax[0].Result, Text: arrLax[0].Text}
+		// Try to unmarshal Arguments as map[string]any
+		if len(arrLax[0].Arguments) > 0 {
+			var args map[string]any
+			if err := json.Unmarshal(arrLax[0].Arguments, &args); err == nil {
+				resp.Arguments = args
+			}
+		}
+		return resp, nil
 	}
 	// 2. Try wrapped object: { "responses": [ ... ] }
 	var wrapped struct {
@@ -199,7 +207,15 @@ func (c *keaClient) parseResponse(data []byte) (keamodels.Response, error) {
 	}
 	if err := json.Unmarshal(data, &wrappedLax); err == nil && len(wrappedLax.Responses) > 0 {
 		lr := wrappedLax.Responses[0]
-		return keamodels.Response{Result: lr.Result, Text: lr.Text}, nil
+		resp := keamodels.Response{Result: lr.Result, Text: lr.Text}
+		// Try to unmarshal Arguments as map[string]any
+		if len(lr.Arguments) > 0 {
+			var args map[string]any
+			if err := json.Unmarshal(lr.Arguments, &args); err == nil {
+				resp.Arguments = args
+			}
+		}
+		return resp, nil
 	}
 	// 3. Try single object (treat as valid even if text is empty and result == 0)
 	var single keamodels.Response
@@ -209,7 +225,15 @@ func (c *keaClient) parseResponse(data []byte) (keamodels.Response, error) {
 	// 3b. Lax single object
 	var singleLax laxResponse
 	if err := json.Unmarshal(data, &singleLax); err == nil {
-		return keamodels.Response{Result: singleLax.Result, Text: singleLax.Text}, nil
+		resp := keamodels.Response{Result: singleLax.Result, Text: singleLax.Text}
+		// Try to unmarshal Arguments as map[string]any
+		if len(singleLax.Arguments) > 0 {
+			var args map[string]any
+			if err := json.Unmarshal(singleLax.Arguments, &args); err == nil {
+				resp.Arguments = args
+			}
+		}
+		return resp, nil
 	}
 
 	// Pretty-print JSON body when possible to aid debugging

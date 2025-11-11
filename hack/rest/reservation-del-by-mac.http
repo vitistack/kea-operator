@@ -7,6 +7,8 @@
 @caPath = {{$dotenv KEA_TLS_CA_FILE}}
 @header = {{$dotenv KEA_HEADER}}
 
+@macAddress = "00:02:12:34:56:78"
+
 // Add a reservation to subnet
 // The operation-target parameter accepts the following values:
 // * memory - query or update the runtime server configuration
@@ -28,7 +30,7 @@ ca: {{caPath}}
     "arguments": {
         "subnet-id": 1,
         "identifier-type": "hw-address",
-        "identifier": "bc:24:11:96:cc:da",
+        "identifier": "{{macAddress}}",
         "operation-target": "all"
     }
 }
@@ -44,7 +46,7 @@ Authorization: Basic {{username}}:{{password}}
     "arguments": {
         "subnet-id": 1,
         "identifier-type": "hw-address",
-        "identifier": "bc:24:11:96:cc:da",
+        "identifier": "{{macAddress}}",
         "operation-target": "all"
     }
 }

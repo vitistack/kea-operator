@@ -24,7 +24,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/vitistack/common/pkg/clients/k8sclient"
 	"github.com/vitistack/common/pkg/loggers/vlog"
-	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
+	vitistackcrdsv1alpha1 "github.com/vitistack/common/pkg/v1alpha1"
 	"github.com/vitistack/kea-operator/internal/clients"
 	"github.com/vitistack/kea-operator/internal/consts"
 	"github.com/vitistack/kea-operator/internal/services/initialchecks"

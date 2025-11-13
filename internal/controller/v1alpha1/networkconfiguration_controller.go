@@ -29,7 +29,7 @@ import (
 	viticommonconditions "github.com/vitistack/common/pkg/operator/conditions"
 	viticommonfinalizers "github.com/vitistack/common/pkg/operator/finalizers"
 	reconcileutil "github.com/vitistack/common/pkg/operator/reconcileutil"
-	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
+	vitistackcrdsv1alpha1 "github.com/vitistack/common/pkg/v1alpha1"
 	keaservice "github.com/vitistack/kea-operator/internal/services/kea"
 	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

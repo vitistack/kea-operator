@@ -27,7 +27,7 @@ package v1alpha1
 
 // 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// 	vitistackcrdsv1alpha1 "github.com/vitistack/crds/pkg/v1alpha1"
+// 	vitistackcrdsv1alpha1 "github.com/common/crds/pkg/v1alpha1"
 // )
 
 // var _ = Describe("NetworkConfiguration Controller", func() {

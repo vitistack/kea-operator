@@ -7,6 +7,8 @@
 @caPath = {{$dotenv KEA_TLS_CA_FILE}}
 @header = {{$dotenv KEA_HEADER}}
 
+@subnetId = 1
+
 ### Get all reservations in a subnet (localhost with certs)
 # @name getAllReservationsDev
 POST {{baseUrl}}:{{port}}/
@@ -18,7 +20,7 @@ ca: {{caPath}}
 {
     "command": "reservation-get-all",
     "arguments": {
-        "subnet-id": 1
+        "subnet-id": {{subnetId}}
      }
 }
 
@@ -31,6 +33,6 @@ Authorization: Basic {{username}}:{{password}}
 {
     "command": "reservation-get-all",
     "arguments": {
-        "subnet-id": 1
+        "subnet-id": {{subnetId}}
      }
 }

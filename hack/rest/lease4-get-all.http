@@ -6,6 +6,7 @@
 @keyPath = {{$dotenv KEA_TLS_KEY_FILE}}
 @caPath = {{$dotenv KEA_TLS_CA_FILE}}
 @header = {{$dotenv KEA_HEADER}}
+@subnetId = 1
 
 ### Get all leases (localhost with certs)
 # @name getAllLeasesDev
@@ -18,7 +19,7 @@ ca: {{caPath}}
 {
     "command": "lease4-get-all",
     "arguments": {
-        "subnets": [1]
+        "subnets": [{{subnetId}}]
     }
 }
 
@@ -31,6 +32,6 @@ Authorization: Basic {{username}}:{{password}}
 {
     "command": "lease4-get-all",
     "arguments": {
-        "subnets": [1]
+        "subnets": [{{subnetId}}]
     }
 }

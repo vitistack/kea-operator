@@ -70,14 +70,14 @@ func checkKea() bool {
 	// Retry a few times to tolerate slow startup/order
 	const (
 		maxRetries    = 3
-		perTryTimeout = 5 * time.Second
+		perTryTimeout = 10 * time.Second
 		backoff       = 2 * time.Second
 	)
 
-	vlog.Info("checking connectivity to Kea", "url", nonEmpty(full, base))
+	vlog.Info("checking connectivity to Kea ", "url ", nonEmpty(full, base))
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), perTryTimeout)
+		ctx, cancel := context.WithTimeout(context.TODO(), perTryTimeout)
 		err := pingKea(ctx)
 		cancel()
 		if err == nil {
@@ -85,7 +85,7 @@ func checkKea() bool {
 			return true
 		}
 		lastErr = err
-		vlog.Warn("kea connectivity attempt failed ", "attempt: ", attempt, "error: ", err)
+		vlog.Warn("kea connectivity attempt failed ", " attempt: ", attempt, " error: ", err)
 		time.Sleep(backoff)
 	}
 

@@ -135,8 +135,8 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 		if err != nil {
 			if i == 0 && len(urls) > 1 {
 				vlog.Logger().Warn("Primary KEA server failed, trying secondary ",
-					"primary: ", baseUrl,
-					"error: ", err.Error())
+					" primary: ", baseUrl,
+					" error: ", err.Error())
 			}
 			lastErr = fmt.Errorf("request failed for %s: %w", base, err)
 			continue

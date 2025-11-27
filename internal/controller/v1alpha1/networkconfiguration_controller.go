@@ -202,7 +202,8 @@ func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Cont
 			}
 		}
 
-		if err := r.Kea.EnsureReservationForMACIP(ctx, mac, sid, ip); err != nil {
+		created, err := r.Kea.EnsureReservationForMACIP(ctx, mac, sid, ip)
+		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", mac, err))
 			continue
 		}
@@ -210,9 +211,17 @@ func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Cont
 		macToSubnetID[mac] = sid
 		if ip != "" {
 			macToIP[mac] = ip
-			log.Info("configured DHCP reservation with IP", "mac", mac, "ip", ip, "subnetID", sid, "subnet", ipv4Prefix)
+			if created {
+				log.Info("configured DHCP reservation with IP", "mac", mac, "ip", ip, "subnetID", sid, "subnet", ipv4Prefix)
+			} else {
+				log.V(1).Info("DHCP reservation already exists", "mac", mac, "ip", ip, "subnetID", sid, "subnet", ipv4Prefix)
+			}
 		} else {
-			log.Info("created MAC-only reservation, IP will be auto-allocated on DHCP request", "mac", mac, "subnetID", sid, "subnet", ipv4Prefix)
+			if created {
+				log.Info("created MAC-only reservation, IP will be auto-allocated on DHCP request", "mac", mac, "subnetID", sid, "subnet", ipv4Prefix)
+			} else {
+				log.V(1).Info("MAC-only reservation already exists", "mac", mac, "subnetID", sid, "subnet", ipv4Prefix)
+			}
 		}
 	}
 

@@ -204,13 +204,14 @@ func (s *Service) DeleteReservationForMAC(ctx context.Context, mac string, subne
 }
 
 // EnsureReservationForMACIP ensures a reservation exists for mac in the given subnet, with optional ip.
-func (s *Service) EnsureReservationForMACIP(ctx context.Context, mac string, subnetID int, ipv4 string) error {
+// Returns (created bool, err error) where created=true if a new reservation was added, false if it already existed.
+func (s *Service) EnsureReservationForMACIP(ctx context.Context, mac string, subnetID int, ipv4 string) (bool, error) {
 	mac = strings.ToLower(strings.TrimSpace(mac))
 	if mac == "" {
-		return fmt.Errorf("missing mac")
+		return false, fmt.Errorf("missing mac")
 	}
 	if s.macReservationExists(ctx, mac, subnetID) {
-		return nil
+		return false, nil // already exists, nothing created
 	}
 	reservation := map[string]any{
 		"subnet-id":  subnetID,
@@ -228,12 +229,12 @@ func (s *Service) EnsureReservationForMACIP(ctx context.Context, mac string, sub
 	}
 	addResp, addErr := s.Client.Send(ctx, addReq)
 	if addErr != nil {
-		return addErr
+		return false, addErr
 	}
 	if addResp.Result != 0 {
-		return fmt.Errorf("kea reservation-add failed: %s", addResp.Text)
+		return false, fmt.Errorf("kea reservation-add failed: %s", addResp.Text)
 	}
-	return nil
+	return true, nil // new reservation created
 }
 
 // macReservationExists checks whether a reservation already exists for the given MAC + subnet.

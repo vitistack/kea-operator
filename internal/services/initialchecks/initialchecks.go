@@ -69,8 +69,8 @@ func checkKea() bool {
 
 	// Retry a few times to tolerate slow startup/order
 	const (
-		maxRetries    = 3
-		perTryTimeout = 10 * time.Second
+		maxRetries    = 5
+		perTryTimeout = 5 * time.Second
 		backoff       = 2 * time.Second
 	)
 

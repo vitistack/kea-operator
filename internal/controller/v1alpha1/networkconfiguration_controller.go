@@ -55,6 +55,8 @@ const (
 	conditionReasonReconciling = "Reconciling"
 	conditionReasonConfigured  = "Configured"
 	conditionReasonError       = "Error"
+
+	RequeueDelay = 5 * time.Second
 )
 
 // +kubebuilder:rbac:groups=vitistack.io,resources=networkconfigurations,verbs=get;list;watch;create;update;patch;delete
@@ -101,7 +103,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	if err != nil {
 		log.Error(err, "failed to get NetworkNamespace ipv4_prefix", "namespace", req.Namespace)
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("NetworkNamespace not found: %v", err), nil)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
 	}
 
 	// Extract MACs
@@ -137,7 +139,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("reservation errors: %s", strings.Join(errs, "; ")), nc.GetGeneration(),
 		))
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", strings.Join(errs, "; "), statusInterfaces)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
 	}
 
 	// Build success message
@@ -147,7 +149,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", nc.GetGeneration(),
 	))
 	_ = r.updateStatus(ctx, nc, "Ready", "Success", statusMsg, statusInterfaces)
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: RequeueDelay}, nil
 }
 
 // handleDeletion handles the deletion of a NetworkConfiguration
@@ -172,7 +174,7 @@ func (r *NetworkConfigurationReconciler) handleSubnetResolutionError(ctx context
 	if strings.Contains(txt, "unsupported kea command") || strings.Contains(txt, "not supported") {
 		return ctrl.Result{}, nil
 	}
-	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: RequeueDelay}, nil
 }
 
 // processMACReservations processes all MAC address reservations

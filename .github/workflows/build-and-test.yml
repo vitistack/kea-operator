@@ -75,10 +75,4 @@ jobs:
 
       - name: Run security scan
         run: |
-          if [ ! -f ~/go/bin/govulncheck ]; then
-            echo "Installing govulncheck..."
-            go install golang.org/x/vuln/cmd/govulncheck@latest
-          else
-            echo "Using cached govulncheck"
-          fi
-          govulncheck ./...
+          make go-security-scan

@@ -32,6 +32,7 @@ import (
 	vitistackcrdsv1alpha1 "github.com/vitistack/common/pkg/v1alpha1"
 	keaservice "github.com/vitistack/kea-operator/internal/services/kea"
 	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
+	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -114,10 +115,21 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// Resolve Kea subnet
-	subnetID, err := r.Kea.GetSubnetID(ctx, ipv4Prefix)
+	// Resolve or create Kea subnet
+	subnetCfg := keamodels.SubnetConfig{
+		Subnet: ipv4Prefix,
+	}
+	subnetID, created, err := r.Kea.GetOrCreateSubnet(ctx, subnetCfg)
 	if err != nil {
-		return r.handleSubnetResolutionError(ctx, nc, ipv4Prefix, err, log)
+		log.Error(err, "failed to get or create Kea subnet", "ipv4Prefix", ipv4Prefix)
+		_ = r.setCondition(ctx, nc, viticommonconditions.New(
+			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("subnet error: %v", err), nc.GetGeneration(),
+		))
+		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("Subnet error: %v", err), nil)
+		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+	}
+	if created {
+		log.Info("created new Kea subnet", "subnet", ipv4Prefix, "subnetID", subnetID)
 	}
 
 	// Get subnet details (gateway, DNS, etc.)
@@ -161,20 +173,6 @@ func (r *NetworkConfigurationReconciler) handleDeletion(ctx context.Context, nc 
 		return reconcileutil.Requeue(err)
 	}
 	return ctrl.Result{}, nil
-}
-
-// handleSubnetResolutionError handles errors when resolving the Kea subnet
-func (r *NetworkConfigurationReconciler) handleSubnetResolutionError(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration, ipv4Prefix string, err error, log logr.Logger) (ctrl.Result, error) {
-	log.Error(err, "failed to resolve Kea subnet id", "ipv4Prefix", ipv4Prefix)
-	txt := strings.ToLower(err.Error())
-	_ = r.setCondition(ctx, nc, viticommonconditions.New(
-		conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("resolve subnet: %v", err), nc.GetGeneration(),
-	))
-	_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("Subnet resolution failed: %v", err), nil)
-	if strings.Contains(txt, "unsupported kea command") || strings.Contains(txt, "not supported") {
-		return ctrl.Result{}, nil
-	}
-	return ctrl.Result{RequeueAfter: RequeueDelay}, nil
 }
 
 // processMACReservations processes all MAC address reservations

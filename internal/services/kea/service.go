@@ -18,6 +18,150 @@ func New(client keainterface.KeaClient) *Service {
 	return &Service{Client: client}
 }
 
+// CreateSubnet creates a new IPv4 subnet in Kea DHCP server.
+// Returns the subnet ID of the newly created subnet.
+func (s *Service) CreateSubnet(ctx context.Context, cfg keamodels.SubnetConfig) (int, error) {
+	if cfg.Subnet == "" {
+		return 0, fmt.Errorf("subnet CIDR is required")
+	}
+
+	// Determine subnet ID - use provided ID or generate the next available one
+	subnetID := cfg.ID
+	if subnetID <= 0 {
+		subnetID = s.getNextSubnetID(ctx)
+	}
+
+	// Build the subnet4 configuration
+	subnet4 := map[string]any{
+		"subnet": cfg.Subnet,
+		"id":     subnetID,
+	}
+
+	// Set valid lifetime (default to 4000 if not specified)
+	if cfg.ValidLife > 0 {
+		subnet4["valid-lifetime"] = cfg.ValidLife
+	} else {
+		subnet4["valid-lifetime"] = 4000
+	}
+
+	if cfg.RenewTimer > 0 {
+		subnet4["renew-timer"] = cfg.RenewTimer
+	}
+
+	if cfg.RebindTimer > 0 {
+		subnet4["rebind-timer"] = cfg.RebindTimer
+	}
+
+	// Build pools if start and end are specified
+	if cfg.PoolStart != "" && cfg.PoolEnd != "" {
+		subnet4["pools"] = []map[string]any{
+			{"pool": fmt.Sprintf("%s - %s", cfg.PoolStart, cfg.PoolEnd)},
+		}
+	}
+
+	// Build option-data for gateway and DNS
+	var optionData []map[string]any
+
+	if cfg.Gateway != "" {
+		optionData = append(optionData, map[string]any{
+			"name": "routers",
+			"code": 3,
+			"data": cfg.Gateway,
+		})
+	}
+
+	if len(cfg.DNS) > 0 {
+		optionData = append(optionData, map[string]any{
+			"name": "domain-name-servers",
+			"code": 6,
+			"data": strings.Join(cfg.DNS, ", "),
+		})
+	}
+
+	if len(optionData) > 0 {
+		subnet4["option-data"] = optionData
+	}
+
+	req := keamodels.Request{
+		Command: "subnet4-add",
+		Args: map[string]any{
+			"subnet4": []map[string]any{subnet4},
+		},
+	}
+
+	resp, err := s.Client.Send(ctx, req)
+	if err != nil {
+		return 0, fmt.Errorf("failed to send subnet4-add request: %w", err)
+	}
+
+	if resp.Result != 0 {
+		return 0, fmt.Errorf("kea subnet4-add failed: %s", resp.Text)
+	}
+
+	// Return the subnet ID we used
+	return subnetID, nil
+}
+
+// getNextSubnetID finds the next available subnet ID by listing existing subnets
+func (s *Service) getNextSubnetID(ctx context.Context) int {
+	req := keamodels.Request{Command: "subnet4-list", Args: map[string]any{}}
+	resp, err := s.Client.Send(ctx, req)
+	if err != nil {
+		return 1 // If we can't list, start with ID 1
+	}
+	if resp.Result != 0 {
+		// No subnets exist or command failed, start with ID 1
+		return 1
+	}
+
+	subnets, ok := resp.Arguments["subnets"].([]any)
+	if !ok || len(subnets) == 0 {
+		return 1 // No subnets, start with ID 1
+	}
+
+	// Find the maximum existing ID
+	maxID := 0
+	for _, snet := range subnets {
+		m, ok := snet.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch idv := m["id"].(type) {
+		case float64:
+			if int(idv) > maxID {
+				maxID = int(idv)
+			}
+		case int:
+			if idv > maxID {
+				maxID = idv
+			}
+		}
+	}
+
+	return maxID + 1
+}
+
+// GetOrCreateSubnet returns the subnet ID for the given prefix, creating the subnet if it doesn't exist.
+func (s *Service) GetOrCreateSubnet(ctx context.Context, cfg keamodels.SubnetConfig) (int, bool, error) {
+	// First, try to find an existing subnet
+	subnetID, err := s.GetSubnetID(ctx, cfg.Subnet)
+	if err == nil {
+		return subnetID, false, nil // Subnet exists, not created
+	}
+
+	// If not found, create it
+	if strings.Contains(err.Error(), "no matching Kea subnet") {
+		subnetID, err = s.CreateSubnet(ctx, cfg)
+		if err != nil {
+			return 0, false, fmt.Errorf("failed to create subnet: %w", err)
+		}
+		return subnetID, true, nil // Subnet created
+	}
+
+	// Some other error occurred
+	return 0, false, err
+}
+
 // GetSubnetID lists Kea subnets and returns the id of the subnet matching the given IPv4 CIDR prefix.
 func (s *Service) GetSubnetID(ctx context.Context, ipv4Prefix string) (int, error) {
 	req := keamodels.Request{Command: "subnet4-list", Args: map[string]any{}}

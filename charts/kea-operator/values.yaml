@@ -118,3 +118,56 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# KEA DHCP server configuration
+kea:
+  # Primary KEA server URL (e.g., https://kea-dhcp.example.com:8000)
+  url: ""
+  # Secondary KEA server URL for HA failover (optional)
+  secondaryUrl: ""
+  # KEA server port (used if url doesn't include port)
+  port: "8000"
+  # Timeout in seconds for KEA API requests
+  timeoutSeconds: "10"
+  # Disable HTTP keep-alive connections
+  disableKeepalives: "true"
+
+  # Basic authentication credentials
+  # These should be overridden in your ArgoCD app or values override
+  auth:
+    username: ""
+    password: ""
+    # Reference to an existing secret containing credentials
+    # If set, username/password above are ignored
+    existingSecret: ""
+    # Key in the secret for username
+    usernameKey: "username"
+    # Key in the secret for password
+    passwordKey: "password"
+
+  # TLS configuration
+  tls:
+    enabled: "false"
+    insecure: "false"
+    serverName: ""
+    # Path to CA certificate file (mounted via volumes)
+    caFile: ""
+    # Path to client certificate file (for mTLS)
+    certFile: ""
+    # Path to client key file (for mTLS)
+    keyFile: ""
+    # Reference to an existing secret containing TLS certificates
+    secretName: ""
+    secretNamespace: ""
+
+# Logging configuration
+logging:
+  level: "info"
+  jsonLogging: "true"
+  colorize: "false"
+  addCaller: "true"
+  disableStacktrace: "false"
+  unescapeMultiline: "false"
+
+# Development mode
+development: "false"

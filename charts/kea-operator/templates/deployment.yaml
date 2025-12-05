@@ -40,6 +40,98 @@ spec:
           {{- end }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # Logging configuration
+            - name: LOG_LEVEL
+              value: {{ .Values.logging.level | quote }}
+            - name: LOG_JSON_LOGGING
+              value: {{ .Values.logging.jsonLogging | quote }}
+            - name: LOG_COLORIZE
+              value: {{ .Values.logging.colorize | quote }}
+            - name: LOG_ADD_CALLER
+              value: {{ .Values.logging.addCaller | quote }}
+            - name: LOG_DISABLE_STACKTRANCE
+              value: {{ .Values.logging.disableStacktrace | quote }}
+            - name: LOG_UNESCAPE_MULTILINE
+              value: {{ .Values.logging.unescapeMultiline | quote }}
+            - name: DEVELOPMENT
+              value: {{ .Values.development | quote }}
+            # KEA server configuration
+            {{- if .Values.kea.url }}
+            - name: KEA_URL
+              value: {{ .Values.kea.url | quote }}
+            {{- end }}
+            {{- if .Values.kea.secondaryUrl }}
+            - name: KEA_SECONDARY_URL
+              value: {{ .Values.kea.secondaryUrl | quote }}
+            {{- end }}
+            {{- if .Values.kea.port }}
+            - name: KEA_PORT
+              value: {{ .Values.kea.port | quote }}
+            {{- end }}
+            {{- if .Values.kea.timeoutSeconds }}
+            - name: KEA_TIMEOUT_SECONDS
+              value: {{ .Values.kea.timeoutSeconds | quote }}
+            {{- end }}
+            {{- if .Values.kea.disableKeepalives }}
+            - name: KEA_DISABLE_KEEPALIVES
+              value: {{ .Values.kea.disableKeepalives | quote }}
+            {{- end }}
+            # KEA authentication
+            {{- if .Values.kea.auth.existingSecret }}
+            - name: KEA_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kea.auth.existingSecret }}
+                  key: {{ .Values.kea.auth.usernameKey }}
+            - name: KEA_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kea.auth.existingSecret }}
+                  key: {{ .Values.kea.auth.passwordKey }}
+            {{- else }}
+            {{- if .Values.kea.auth.username }}
+            - name: KEA_BASIC_AUTH_USERNAME
+              value: {{ .Values.kea.auth.username | quote }}
+            {{- end }}
+            {{- if .Values.kea.auth.password }}
+            - name: KEA_BASIC_AUTH_PASSWORD
+              value: {{ .Values.kea.auth.password | quote }}
+            {{- end }}
+            {{- end }}
+            # KEA TLS configuration
+            {{- if .Values.kea.tls.enabled }}
+            - name: KEA_TLS_ENABLED
+              value: {{ .Values.kea.tls.enabled | quote }}
+            {{- end }}
+            {{- if .Values.kea.tls.insecure }}
+            - name: KEA_TLS_INSECURE
+              value: {{ .Values.kea.tls.insecure | quote }}
+            {{- end }}
+            {{- if .Values.kea.tls.serverName }}
+            - name: KEA_TLS_SERVER_NAME
+              value: {{ .Values.kea.tls.serverName | quote }}
+            {{- end }}
+            {{- if .Values.kea.tls.caFile }}
+            - name: KEA_TLS_CA_FILE
+              value: {{ .Values.kea.tls.caFile | quote }}
+            {{- end }}
+            {{- if .Values.kea.tls.certFile }}
+            - name: KEA_TLS_CERT_FILE
+              value: {{ .Values.kea.tls.certFile | quote }}
+            {{- end }}
+            {{- if .Values.kea.tls.keyFile }}
+            - name: KEA_TLS_KEY_FILE
+              value: {{ .Values.kea.tls.keyFile | quote }}
+            {{- end }}
+            {{- if .Values.kea.tls.secretName }}
+            - name: KEA_TLS_SECRET_NAME
+              value: {{ .Values.kea.tls.secretName | quote }}
+            {{- end }}
+            {{- if .Values.kea.tls.secretNamespace }}
+            - name: KEA_TLS_SECRET_NAMESPACE
+              value: {{ .Values.kea.tls.secretNamespace | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}

@@ -103,24 +103,9 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v*}"
-
-          cat << EOF > .github/yq-script.yaml
-          - command: update
-            path: version
-            value: "${VERSION}"
-          - command: update
-            path: appVersion
-            value: "${VERSION}"
-          EOF
-
-          cat << EOF > .github/yq-values-script.yaml
-          - command: update
-            path: image.tag
-            value: "${VERSION}"
-          EOF
-
-          npx -y yq-cli write --file=.github/yq-script.yaml charts/kea-operator/Chart.yaml
-          npx -y yq-cli write --file=.github/yq-values-script.yaml charts/kea-operator/values.yaml
+          yq -i ".version = \"${VERSION}\"" charts/kea-operator/Chart.yaml
+          yq -i ".appVersion = \"${VERSION}\"" charts/kea-operator/Chart.yaml
+          yq -i ".image.tag = \"${VERSION}\"" charts/kea-operator/values.yaml
 
       - name: Package Helm chart
         run: |

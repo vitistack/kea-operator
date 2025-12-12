@@ -26,4 +26,7 @@ const (
 	// Basic auth credentials (optional) – if set and no client certs provided, basic auth will be used
 	KEA_BASIC_AUTH_USERNAME = "KEA_BASIC_AUTH_USERNAME"
 	KEA_BASIC_AUTH_PASSWORD = "KEA_BASIC_AUTH_PASSWORD" // #nosec G101 false positive – variable name only
+
+	// Pool configuration for subnet creation
+	KEA_REQUIRE_CLIENT_CLASSES = "KEA_REQUIRE_CLIENT_CLASSES" // comma-separated list of client classes
 )

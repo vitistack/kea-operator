@@ -54,9 +54,13 @@ func (s *Service) CreateSubnet(ctx context.Context, cfg keamodels.SubnetConfig) 
 
 	// Build pools if start and end are specified
 	if cfg.PoolStart != "" && cfg.PoolEnd != "" {
-		subnet4["pools"] = []map[string]any{
-			{"pool": fmt.Sprintf("%s - %s", cfg.PoolStart, cfg.PoolEnd)},
+		pool := map[string]any{
+			"pool": fmt.Sprintf("%s - %s", cfg.PoolStart, cfg.PoolEnd),
 		}
+		if len(cfg.RequireClientClasses) > 0 {
+			pool["require-client-classes"] = cfg.RequireClientClasses
+		}
+		subnet4["pools"] = []map[string]any{pool}
 	}
 
 	// Build option-data for gateway and DNS

@@ -25,12 +25,15 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/spf13/viper"
 	"github.com/vitistack/common/pkg/loggers/vlog"
 	viticommonconditions "github.com/vitistack/common/pkg/operator/conditions"
 	viticommonfinalizers "github.com/vitistack/common/pkg/operator/finalizers"
 	reconcileutil "github.com/vitistack/common/pkg/operator/reconcileutil"
 	vitistackcrdsv1alpha1 "github.com/vitistack/common/pkg/v1alpha1"
+	"github.com/vitistack/kea-operator/internal/consts"
 	keaservice "github.com/vitistack/kea-operator/internal/services/kea"
+	subnetutil "github.com/vitistack/kea-operator/internal/util/subnet"
 	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -116,8 +119,29 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Resolve or create Kea subnet
+	poolCfg, err := subnetutil.CalculatePoolFromCIDR(ipv4Prefix)
+	if err != nil {
+		log.Error(err, "failed to calculate pool from CIDR", "ipv4Prefix", ipv4Prefix)
+		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("Invalid CIDR: %v", err), nil)
+		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+	}
+
+	// Get require-client-classes from configuration
+	var requireClientClasses []string
+	if classes := viper.GetString(consts.KEA_REQUIRE_CLIENT_CLASSES); classes != "" {
+		for c := range strings.SplitSeq(classes, ",") {
+			if trimmed := strings.TrimSpace(c); trimmed != "" {
+				requireClientClasses = append(requireClientClasses, trimmed)
+			}
+		}
+	}
+
 	subnetCfg := keamodels.SubnetConfig{
-		Subnet: ipv4Prefix,
+		Subnet:               ipv4Prefix,
+		Gateway:              poolCfg.Gateway,
+		PoolStart:            poolCfg.PoolStart,
+		PoolEnd:              poolCfg.PoolEnd,
+		RequireClientClasses: requireClientClasses,
 	}
 	subnetID, created, err := r.Kea.GetOrCreateSubnet(ctx, subnetCfg)
 	if err != nil {

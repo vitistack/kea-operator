@@ -39,15 +39,19 @@ podAnnotations: {}
 podLabels: {}
 
 podSecurityContext:
-  fsGroup: 2000
+  fsGroup: 65532
 
 securityContext:
+  allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
   readOnlyRootFilesystem: true
   runAsNonRoot: true
-  runAsUser: 1000
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
 
 # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
 service:
@@ -85,12 +89,16 @@ resources:
 # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 livenessProbe:
   httpGet:
-    path: /
-    port: http
+    path: /healthz
+    port: 9995
+  initialDelaySeconds: 15
+  periodSeconds: 20
 readinessProbe:
   httpGet:
-    path: /
-    port: http
+    path: /readyz
+    port: 9995
+  initialDelaySeconds: 5
+  periodSeconds: 10
 
 # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
 autoscaling:
@@ -131,6 +139,8 @@ kea:
   timeoutSeconds: "10"
   # Disable HTTP keep-alive connections
   disableKeepalives: "true"
+  # Comma-separated list of required client classes for pools
+  requireClientClasses: "biosclients,ueficlients,ipxeclients"
 
   # Basic authentication credentials
   # These should be overridden in your ArgoCD app or values override

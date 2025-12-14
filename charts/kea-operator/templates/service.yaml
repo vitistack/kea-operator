@@ -7,9 +7,9 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.service.port }}
-      targetPort: http
+    - port: 9995
+      targetPort: health
       protocol: TCP
-      name: http
+      name: health
   selector:
     {{- include "kea-operator.selectorLabels" . | nindent 4 }}

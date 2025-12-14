@@ -77,6 +77,10 @@ spec:
             - name: KEA_DISABLE_KEEPALIVES
               value: {{ .Values.kea.disableKeepalives | quote }}
             {{- end }}
+            {{- if .Values.kea.requireClientClasses }}
+            - name: KEA_REQUIRE_CLIENT_CLASSES
+              value: {{ .Values.kea.requireClientClasses | quote }}
+            {{- end }}
             # KEA authentication
             {{- if .Values.kea.auth.existingSecret }}
             - name: KEA_BASIC_AUTH_USERNAME
@@ -133,8 +137,8 @@ spec:
               value: {{ .Values.kea.tls.secretNamespace | quote }}
             {{- end }}
           ports:
-            - name: http
-              containerPort: {{ .Values.service.port }}
+            - name: health
+              containerPort: 9995
               protocol: TCP
           {{- with .Values.livenessProbe }}
           livenessProbe:

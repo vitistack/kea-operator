@@ -56,7 +56,7 @@ func printEnvironmentSettings() {
 		val := viper.Get(s)
 		if val != nil {
 			// #nosec G202
-			vlog.Debug(s + "=" + viper.GetString(s))
+			vlog.Info(s + "=" + viper.GetString(s))
 		}
 	}
 }

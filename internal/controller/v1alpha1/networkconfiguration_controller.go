@@ -67,6 +67,7 @@ const (
 // +kubebuilder:rbac:groups=vitistack.io,resources=networkconfigurations/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=vitistack.io,resources=networkconfigurations/finalizers,verbs=update
 // +kubebuilder:rbac:groups=vitistack.io,resources=networknamespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile fetches the NetworkConfiguration Custom Resource, reads MAC addresses
 // from spec.networkInterfaces[].macAddress, looks up the NetworkNamespace IPv4

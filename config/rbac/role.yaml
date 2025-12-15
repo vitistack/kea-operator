@@ -4,37 +4,45 @@ kind: ClusterRole
 metadata:
   name: manager-role
 rules:
-- apiGroups:
-  - vitistack.io
-  resources:
-  - networkconfigurations
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - vitistack.io
-  resources:
-  - networkconfigurations/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - vitistack.io
-  resources:
-  - networkconfigurations/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - vitistack.io
-  resources:
-  - networknamespaces
-  verbs:
-  - get
-  - list
-  - watch
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - vitistack.io
+    resources:
+      - networkconfigurations
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - vitistack.io
+    resources:
+      - networkconfigurations/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - vitistack.io
+    resources:
+      - networkconfigurations/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - vitistack.io
+    resources:
+      - networknamespaces
+    verbs:
+      - get
+      - list
+      - watch

@@ -177,7 +177,13 @@ func OptionFromEnv() KeaOption {
 			cfg.BasicAuthUsername = basicUser
 			cfg.BasicAuthPassword = basicPass
 		}
-		// TLS settings only if enabled (default disabled)
+
+		// InsecureSkipVerify applies regardless of KEA_TLS_ENABLED (for HTTPS URLs with untrusted certs)
+		if viper.IsSet(consts.KEA_TLS_INSECURE) {
+			cfg.InsecureSkipVerify = viper.GetBool(consts.KEA_TLS_INSECURE)
+		}
+
+		// TLS certificate settings only if enabled (default disabled)
 		tlsEnabled := viper.GetBool(consts.KEA_TLS_ENABLED)
 		if tlsEnabled {
 			if v := viper.GetString(consts.KEA_TLS_CA_FILE); v != "" {
@@ -188,9 +194,6 @@ func OptionFromEnv() KeaOption {
 			}
 			if v := viper.GetString(consts.KEA_TLS_KEY_FILE); v != "" {
 				cfg.ClientKeyPath = v
-			}
-			if viper.IsSet(consts.KEA_TLS_INSECURE) {
-				cfg.InsecureSkipVerify = viper.GetBool(consts.KEA_TLS_INSECURE)
 			}
 			if v := viper.GetString(consts.KEA_TLS_SERVER_NAME); v != "" {
 				cfg.ServerName = v

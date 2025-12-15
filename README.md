@@ -54,6 +54,58 @@ Undeploy:
 make undeploy
 ```
 
+## Helm Installation
+
+### Prerequisites
+
+Create a Kubernetes secret with your Kea credentials:
+
+```bash
+kubectl create namespace vitistack
+
+kubectl create secret generic kea-credentials \
+  --namespace vitistack \
+  --from-literal=username=your-kea-username \
+  --from-literal=password=your-kea-password
+```
+
+### Install the Operator
+
+```bash
+helm install vitistack-kea-operator oci://ghcr.io/vitistack/helm/kea-operator \
+  --namespace vitistack \
+  --set kea.url="https://kea1.example.com" \
+  --set kea.secondaryUrl="https://kea2.example.com" \
+  --set kea.auth.existingSecret="kea-credentials"
+```
+
+For self-signed or internal CA certificates, add TLS insecure mode:
+
+```bash
+helm install vitistack-kea-operator oci://ghcr.io/vitistack/helm/kea-operator \
+  --namespace vitistack \
+  --set kea.url="https://kea1.example.com" \
+  --set kea.secondaryUrl="https://kea2.example.com" \
+  --set kea.tls.insecure=true \
+  --set kea.auth.existingSecret="kea-credentials"
+```
+
+### Upgrade
+
+```bash
+helm upgrade vitistack-kea-operator oci://ghcr.io/vitistack/helm/kea-operator \
+  --namespace vitistack \
+  --reuse-values
+```
+
+### Uninstall
+
+```bash
+helm uninstall vitistack-kea-operator --namespace vitistack
+```
+
+For full Helm chart documentation, see [charts/kea-operator/README.md](charts/kea-operator/README.md).
+
 ## Usage example
 
 Prereq: A NetworkNamespace with an IPv4 prefix in status (typically set by another controller):

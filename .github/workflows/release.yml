@@ -12,7 +12,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/vitistack/kea-operator
+  IMAGE_NAME: ghcr.io/vitistack/viti-kea-operator
   HELM_REGISTRY: ghcr.io/vitistack/helm
 
 jobs:

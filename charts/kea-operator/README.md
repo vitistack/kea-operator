@@ -81,7 +81,7 @@ helm uninstall vitistack-kea-operator --namespace vitistack
 | Parameter          | Description                              | Default                          |
 | ------------------ | ---------------------------------------- | -------------------------------- |
 | `replicaCount`     | Number of replicas                       | `1`                              |
-| `image.repository` | Image repository                         | `ghcr.io/vitistack/kea-operator` |
+| `image.repository` | Image repository                         | `ghcr.io/vitistack/viti-kea-operator` |
 | `image.pullPolicy` | Image pull policy                        | `IfNotPresent`                   |
 | `image.tag`        | Image tag (defaults to chart appVersion) | `""`                             |
 | `imagePullSecrets` | Image pull secrets                       | `[]`                             |
@@ -181,7 +181,7 @@ helm uninstall vitistack-kea-operator --namespace vitistack
 replicaCount: 1
 
 image:
-  repository: ghcr.io/vitistack/kea-operator
+  repository: ghcr.io/vitistack/viti-kea-operator
   pullPolicy: IfNotPresent
   tag: "latest"
 

@@ -45,7 +45,7 @@ CRDs for NetworkConfiguration/NetworkNamespace live in vitistack/crds. Use the h
 
 ```bash
 make install          # installs VitiStack CRDs into current kube-context
-make deploy IMG=<your-repo>/kea-operator:<tag>
+make deploy IMG=<your-repo>/viti-kea-operator:<tag>
 ```
 
 Undeploy:

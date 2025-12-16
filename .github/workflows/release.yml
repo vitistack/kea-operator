@@ -19,20 +19,30 @@ jobs:
   # Build OCI images for multiple architectures in parallel
   build-image:
     name: Build Image (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    # Prefer a native ARM runner for arm64 builds (faster, no emulation).
+    # GitHub-hosted ARM runners are only available for public repositories.
+    # For private repositories, fall back to ubuntu-latest + QEMU emulation.
+    runs-on: ${{ matrix.platform == 'linux/arm64' && (github.event.repository.private && 'ubuntu-latest' || 'ubuntu-24.04-arm') || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
             arch: amd64
-            runner: ubuntu-latest
           - platform: linux/arm64
             arch: arm64
-            runner: ubuntu-24.04-arm # Native ARM runner (public repos only)
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
+      - name: Set up QEMU (arm64 on x64 runner)
+        if: ${{ runner.arch != 'ARM64' && matrix.platform == 'linux/arm64' }}
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -117,6 +127,10 @@ jobs:
     name: Publish & Sign
     needs: [build-image, package-helm]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     steps:
       - name: Download digests
         uses: actions/download-artifact@v7
@@ -160,6 +174,9 @@ jobs:
 
       - name: Push Helm chart
         run: |
+          # NOTE: If pushes fail with "denied: permission_denied: write_package", your repo/org
+          # likely has Actions set to read-only workflow tokens. Fix in GitHub Settings:
+          # Settings -> Actions -> General -> Workflow permissions -> Read and write permissions.
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
           helm push /tmp/helm/kea-operator-*.tgz oci://${{ env.HELM_REGISTRY }}
 

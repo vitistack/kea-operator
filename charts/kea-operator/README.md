@@ -78,15 +78,15 @@ helm uninstall vitistack-kea-operator --namespace vitistack
 
 ### General Settings
 
-| Parameter          | Description                              | Default                          |
-| ------------------ | ---------------------------------------- | -------------------------------- |
-| `replicaCount`     | Number of replicas                       | `1`                              |
+| Parameter          | Description                              | Default                               |
+| ------------------ | ---------------------------------------- | ------------------------------------- |
+| `replicaCount`     | Number of replicas                       | `1`                                   |
 | `image.repository` | Image repository                         | `ghcr.io/vitistack/viti-kea-operator` |
-| `image.pullPolicy` | Image pull policy                        | `IfNotPresent`                   |
-| `image.tag`        | Image tag (defaults to chart appVersion) | `""`                             |
-| `imagePullSecrets` | Image pull secrets                       | `[]`                             |
-| `nameOverride`     | Override chart name                      | `""`                             |
-| `fullnameOverride` | Override full name                       | `""`                             |
+| `image.pullPolicy` | Image pull policy                        | `IfNotPresent`                        |
+| `image.tag`        | Image tag (defaults to chart appVersion) | `""`                                  |
+| `imagePullSecrets` | Image pull secrets                       | `[]`                                  |
+| `nameOverride`     | Override chart name                      | `""`                                  |
+| `fullnameOverride` | Override full name                       | `""`                                  |
 
 ### Service Account
 

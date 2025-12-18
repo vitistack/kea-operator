@@ -54,7 +54,7 @@ type NetworkConfigurationReconciler struct {
 }
 
 const (
-	finalizerName              = "networkconfiguration.finalizers.vitistack.io"
+	finalizerName              = "vitistack.io/networkconfiguration-finalizer"
 	conditionTypeReady         = "Ready"
 	conditionReasonReconciling = "Reconciling"
 	conditionReasonConfigured  = "Configured"

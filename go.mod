@@ -7,7 +7,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.27.3
 	github.com/onsi/gomega v1.38.3
 	github.com/spf13/viper v1.21.0
-	github.com/vitistack/common v0.8.17
+	github.com/vitistack/common v0.8.20
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0

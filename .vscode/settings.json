@@ -16,5 +16,8 @@
   "rest-client.timeoutinmilliseconds": 0,
   "go.useLanguageServer": true,
   "go.languageServerFlags": ["-mcp.listen=localhost:8092"],
-  "go.toolsManagement.autoUpdate": true
+  "go.toolsManagement.autoUpdate": true,
+  "gopls": {
+    "ui.vulncheck": "Imports"
+  }
 }

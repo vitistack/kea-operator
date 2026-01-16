@@ -3,7 +3,7 @@ KEA Operator has been installed.
 PREREQUISITES:
   Before using this operator, ensure you have installed the VitiStack CRDs:
   
-    helm install vitistack-crds oci://ghcr.io/vitistack/crds
+    helm install vitistack-crds oci://ghcr.io/vitistack/helm/crds
 
 CONFIGURATION:
   Make sure to configure the KEA server URL:

@@ -41,3 +41,6 @@ hack/machine-manifests/**/*
 !hack/talos-configs/.gitkeep
 !hack/machine-manifests/.gitkeep
 hack/docker/config
+
+# SBOM output
+sbom/

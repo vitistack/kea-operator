@@ -16,33 +16,26 @@ env:
   HELM_REGISTRY: ghcr.io/vitistack/helm
 
 jobs:
-  # Build OCI images for multiple architectures in parallel
+  # Build OCI images for multiple architectures using native runners
   build-image:
     name: Build Image (${{ matrix.platform }})
     permissions:
       contents: read
       packages: write
-    # Prefer a native ARM runner for arm64 builds (faster, no emulation).
-    # GitHub-hosted ARM runners are only available for public repositories.
-    # For private repositories, fall back to ubuntu-latest + QEMU emulation.
-    runs-on: ${{ matrix.platform == 'linux/arm64' && (github.event.repository.private && 'ubuntu-latest' || 'ubuntu-24.04-arm') || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
             arch: amd64
+            runner: ubuntu-latest
           - platform: linux/arm64
             arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      - name: Set up QEMU (arm64 on x64 runner)
-        if: ${{ runner.arch != 'ARM64' && matrix.platform == 'linux/arm64' }}
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -372,13 +372,13 @@ func hashBytes(b []byte) string {
 // if that fails, it tries conventional fallbacks in the same directory: client.crt/client.key and tls.crt/tls.key.
 // Returns nil if no pair could be loaded.
 func (c *keaClient) loadClientCertWithFallback() *tls.Certificate {
-	pathsTried := [][2]string{{c.ClientCertPath, c.ClientKeyPath}}
 	dir := filepath.Dir(c.ClientCertPath)
 	// Add common alternative names
-	pathsTried = append(pathsTried,
-		[2]string{filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key")},
-		[2]string{filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")},
-	)
+	pathsTried := [][2]string{
+		{c.ClientCertPath, c.ClientKeyPath},
+		{filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key")},
+		{filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")},
+	}
 	for _, p := range pathsTried {
 		certPath, keyPath := p[0], p[1]
 		if certPath == "" || keyPath == "" {

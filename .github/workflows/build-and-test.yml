@@ -40,16 +40,6 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Cache tools
-        uses: actions/cache@v5
-        with:
-          path: |
-            bin/golangci-lint*
-            bin/controller-gen*
-          key: ${{ runner.os }}-build-tools-${{ hashFiles('go.mod', 'Makefile') }}
-          restore-keys: |
-            ${{ runner.os }}-build-tools-
-
       - name: Build
         run: make build
 
@@ -79,7 +69,6 @@ jobs:
           path: |
             bin/k8s
             bin/setup-envtest*
-            bin/controller-gen*
           key: ${{ runner.os }}-test-tools-${{ hashFiles('go.mod', 'Makefile') }}
           restore-keys: |
             ${{ runner.os }}-test-tools-
@@ -110,16 +99,6 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
           cache: true
           cache-dependency-path: go.sum
-
-      - name: Cache security tools
-        uses: actions/cache@v5
-        with:
-          path: |
-            bin/gosec*
-            bin/govulncheck*
-          key: ${{ runner.os }}-security-tools-${{ hashFiles('go.mod') }}
-          restore-keys: |
-            ${{ runner.os }}-security-tools-
 
       - name: Run gosec
         run: make gosec

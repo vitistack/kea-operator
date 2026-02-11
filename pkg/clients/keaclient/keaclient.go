@@ -131,7 +131,7 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 			req.SetBasicAuth(c.BasicAuthUsername, c.BasicAuthPassword)
 		}
 
-		resp, err := c.HttpClient.Do(req)
+		resp, err := c.HttpClient.Do(req) // #nosec G704 -- URL is validated via buildBaseURL() using url.Parse; BaseUrl is operator-configured
 		if err != nil {
 			if i == 0 && len(urls) > 1 {
 				vlog.Logger().Warn("Primary KEA server failed, trying secondary ",

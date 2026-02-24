@@ -313,7 +313,7 @@ func (s *Service) GetSubnetInfo(ctx context.Context, subnetID int) (*SubnetInfo,
 				info.Gateway = data
 			} else if code == 6 && data != "" {
 				// DNS can be comma-separated
-				for _, dns := range strings.Split(data, ",") {
+				for dns := range strings.SplitSeq(data, ",") {
 					dns = strings.TrimSpace(dns)
 					if dns != "" {
 						info.DNS = append(info.DNS, dns)

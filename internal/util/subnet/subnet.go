@@ -63,7 +63,7 @@ func CalculatePoolFromCIDR(cidr string) (*PoolConfig, error) {
 
 // isIPLess returns true if a < b for IPv4 addresses
 func isIPLess(a, b net.IP) bool {
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if a[i] < b[i] {
 			return true
 		}

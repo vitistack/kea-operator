@@ -138,14 +138,14 @@ jobs:
       id-token: write
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Download Helm chart
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: helm-chart
           path: /tmp/helm
@@ -222,13 +222,13 @@ jobs:
       contents: write
     steps:
       - name: Download source SBOM
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: sbom-source
           path: sbom
 
       - name: Download container SBOM
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: sbom-container
           path: sbom

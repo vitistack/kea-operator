@@ -22,6 +22,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -62,6 +63,10 @@ const (
 
 	RequeueDelay = 5 * time.Second
 )
+
+// deprecationWarned tracks namespaces for which the deprecation warning has already been logged,
+// so we don't spam the logs on every reconcile loop.
+var deprecationWarned sync.Map
 
 // +kubebuilder:rbac:groups=vitistack.io,resources=networkconfigurations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=vitistack.io,resources=networkconfigurations/status,verbs=get;update;patch
@@ -104,7 +109,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Get IPv4 prefix from NetworkNamespace
-	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, req.Namespace)
+	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, req.Namespace, nc.Spec.NetworkNamespaceName)
 	if err != nil {
 		log.Error(err, "failed to get NetworkNamespace ipv4_prefix", "namespace", req.Namespace)
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("NetworkNamespace not found: %v", err), nil)
@@ -327,16 +332,33 @@ func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) erro
 }
 
 // getIPv4PrefixFromNetworkNamespace returns the NetworkNamespace.Status.IPv4Prefix
-// for the provided Kubernetes namespace by listing the typed NetworkNamespace objects.
-func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx context.Context, namespace string) (string, error) {
-	nnList := &vitistackcrdsv1alpha1.NetworkNamespaceList{}
-	if err := r.List(ctx, nnList, client.InNamespace(namespace)); err != nil {
-		return "", err
+// for the provided Kubernetes namespace. When networkNamespaceName is specified,
+// it fetches that specific NetworkNamespace by name. Otherwise, it falls back to
+// listing all NetworkNamespaces in the namespace and picking the first one (legacy
+// behaviour, with a deprecation warning).
+func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx context.Context, namespace, networkNamespaceName string) (string, error) {
+	var nn vitistackcrdsv1alpha1.NetworkNamespace
+
+	if networkNamespaceName != "" {
+		// Direct lookup by name
+		if err := r.Get(ctx, client.ObjectKey{Name: networkNamespaceName, Namespace: namespace}, &nn); err != nil {
+			return "", fmt.Errorf("failed to get NetworkNamespace %s in namespace %s: %w", networkNamespaceName, namespace, err)
+		}
+	} else {
+		// Legacy fallback: list and pick the first one
+		if _, alreadyWarned := deprecationWarned.LoadOrStore(namespace, true); !alreadyWarned {
+			vlog.Warn("DEPRECATION: networkNamespaceName not set on NetworkConfiguration, falling back to listing NetworkNamespaces in namespace. Please set spec.networkNamespaceName.", "namespace", namespace)
+		}
+		nnList := &vitistackcrdsv1alpha1.NetworkNamespaceList{}
+		if err := r.List(ctx, nnList, client.InNamespace(namespace)); err != nil {
+			return "", err
+		}
+		if len(nnList.Items) == 0 {
+			return "", fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
+		}
+		nn = nnList.Items[0]
 	}
-	if len(nnList.Items) == 0 {
-		return "", fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
-	}
-	nn := nnList.Items[0]
+
 	if nn.Status.IPv4Prefix != "" {
 		return nn.Status.IPv4Prefix, nil
 	}
@@ -384,7 +406,7 @@ func extractMACsFromTypedNetworkConfiguration(networkconf *vitistackcrdsv1alpha1
 // It reads MACs from the typed NetworkConfiguration, resolves the subnet-id for
 // the namespace prefix, and issues reservation deletions in Kea.
 func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration) error {
-	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, nc.GetNamespace())
+	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, nc.GetNamespace(), nc.Spec.NetworkNamespaceName)
 	if err != nil {
 		vlog.Debug("skipping reservation cleanup, NetworkNamespace not available",
 			"namespace", nc.GetNamespace(), "error", err)

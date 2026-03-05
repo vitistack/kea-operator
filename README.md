@@ -95,7 +95,7 @@ helm install vitistack-kea-operator oci://ghcr.io/vitistack/helm/kea-operator \
 ```bash
 helm upgrade vitistack-kea-operator oci://ghcr.io/vitistack/helm/kea-operator \
   --namespace vitistack \
-  --reuse-values
+  --reset-then-reuse-values
 ```
 
 ### Uninstall

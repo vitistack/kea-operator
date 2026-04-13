@@ -87,6 +87,26 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Check spec.provider early — before adding a finalizer — to avoid claiming
+	// resources that belong to another operator.
+	// Unset/empty = backward compatible, kea-operator handles it (with warning).
+	// "kea" (case-insensitive) = explicitly ours.
+	// Anything else = not ours, skip.
+	if vitistackcrdsv1alpha1.IsProviderSet(nc.Spec.Provider) &&
+		!vitistackcrdsv1alpha1.MatchesProvider(nc.Spec.Provider, vitistackcrdsv1alpha1.ProviderNameKea) {
+		log.V(1).Info("skipping NetworkConfiguration, spec.provider is not 'kea'",
+			"provider", nc.Spec.Provider, "name", nc.Name)
+		return ctrl.Result{}, nil
+	}
+	if !vitistackcrdsv1alpha1.IsProviderSet(nc.Spec.Provider) {
+		if _, alreadyWarned := deprecationWarned.LoadOrStore("ncprov-"+nc.Name, true); !alreadyWarned {
+			log.Info("WARNING: NetworkConfiguration does not have spec.provider set. "+
+				"The kea-operator is handling it by default for backward compatibility. "+
+				"Please set spec.provider to 'kea' explicitly.",
+				"name", nc.Name, "namespace", nc.Namespace)
+		}
+	}
+
 	// Handle deletion
 	if !nc.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, nc, log)
@@ -108,11 +128,36 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		_ = r.updateStatus(ctx, nc, "Reconciling", "InProgress", "Reconciliation in progress", nil)
 	}
 
-	// Get IPv4 prefix from NetworkNamespace
-	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, req.Namespace, nc.Spec.NetworkNamespaceName)
+	// Get NetworkNamespace and check IP allocation provider
+	nn, err := r.getNetworkNamespace(ctx, req.Namespace, nc.Spec.NetworkNamespaceName)
 	if err != nil {
-		log.Error(err, "failed to get NetworkNamespace ipv4_prefix", "namespace", req.Namespace)
+		log.Error(err, "failed to get NetworkNamespace", "namespace", req.Namespace)
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("NetworkNamespace not found: %v", err), nil)
+		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+	}
+
+	// Skip reconciliation if the NetworkNamespace uses a non-DHCP type.
+	// When ipAllocation is nil, default behavior is DHCP (backward compatible).
+	if nn.Spec.IPAllocation != nil && nn.Spec.IPAllocation.Type != vitistackcrdsv1alpha1.IPAllocationTypeDHCP {
+		log.V(1).Info("skipping DHCP reconciliation, NetworkNamespace uses a different IP allocation type",
+			"type", nn.Spec.IPAllocation.Type, "networkNamespace", nn.Name)
+		return ctrl.Result{}, nil
+	}
+
+	// Warn when ipAllocation is not explicitly configured on the NetworkNamespace.
+	if nn.Spec.IPAllocation == nil {
+		if _, alreadyWarned := deprecationWarned.LoadOrStore("ipalloc-"+nn.Name, true); !alreadyWarned {
+			log.Info("WARNING: NetworkNamespace does not have spec.ipAllocation set. "+
+				"Defaulting to DHCP behavior. Please set spec.ipAllocation.type to 'dhcp' "+
+				"and set spec.provider to 'kea' on NetworkConfigurations.",
+				"networkNamespace", nn.Name, "namespace", req.Namespace)
+		}
+	}
+
+	ipv4Prefix := nn.Status.IPv4Prefix
+	if ipv4Prefix == "" {
+		log.Error(nil, "NetworkNamespace missing status.IPv4Prefix", "namespace", req.Namespace, "networkNamespace", nn.Name)
+		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("NetworkNamespace %s missing status.IPv4Prefix", nn.Name), nil)
 		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
 	}
 
@@ -331,18 +376,18 @@ func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		Complete(r)
 }
 
-// getIPv4PrefixFromNetworkNamespace returns the NetworkNamespace.Status.IPv4Prefix
-// for the provided Kubernetes namespace. When networkNamespaceName is specified,
-// it fetches that specific NetworkNamespace by name. Otherwise, it falls back to
-// listing all NetworkNamespaces in the namespace and picking the first one (legacy
+// getNetworkNamespace fetches the NetworkNamespace for the given Kubernetes
+// namespace. When networkNamespaceName is specified, it fetches that specific
+// NetworkNamespace by name. Otherwise, it falls back to listing all
+// NetworkNamespaces in the namespace and picking the first one (legacy
 // behaviour, with a deprecation warning).
-func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx context.Context, namespace, networkNamespaceName string) (string, error) {
+func (r *NetworkConfigurationReconciler) getNetworkNamespace(ctx context.Context, namespace, networkNamespaceName string) (*vitistackcrdsv1alpha1.NetworkNamespace, error) {
 	var nn vitistackcrdsv1alpha1.NetworkNamespace
 
 	if networkNamespaceName != "" {
 		// Direct lookup by name
 		if err := r.Get(ctx, client.ObjectKey{Name: networkNamespaceName, Namespace: namespace}, &nn); err != nil {
-			return "", fmt.Errorf("failed to get NetworkNamespace %s in namespace %s: %w", networkNamespaceName, namespace, err)
+			return nil, fmt.Errorf("failed to get NetworkNamespace %s in namespace %s: %w", networkNamespaceName, namespace, err)
 		}
 	} else {
 		// Legacy fallback: list and pick the first one
@@ -351,18 +396,15 @@ func (r *NetworkConfigurationReconciler) getIPv4PrefixFromNetworkNamespace(ctx c
 		}
 		nnList := &vitistackcrdsv1alpha1.NetworkNamespaceList{}
 		if err := r.List(ctx, nnList, client.InNamespace(namespace)); err != nil {
-			return "", err
+			return nil, err
 		}
 		if len(nnList.Items) == 0 {
-			return "", fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
+			return nil, fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
 		}
 		nn = nnList.Items[0]
 	}
 
-	if nn.Status.IPv4Prefix != "" {
-		return nn.Status.IPv4Prefix, nil
-	}
-	return "", fmt.Errorf("NetworkNamespace missing status.IPv4Prefix in namespace %s", namespace)
+	return &nn, nil
 }
 
 // extractMACsFromTypedNetworkConfiguration reads MAC addresses strictly from
@@ -406,16 +448,16 @@ func extractMACsFromTypedNetworkConfiguration(networkconf *vitistackcrdsv1alpha1
 // It reads MACs from the typed NetworkConfiguration, resolves the subnet-id for
 // the namespace prefix, and issues reservation deletions in Kea.
 func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration) error {
-	ipv4Prefix, err := r.getIPv4PrefixFromNetworkNamespace(ctx, nc.GetNamespace(), nc.Spec.NetworkNamespaceName)
+	nn, err := r.getNetworkNamespace(ctx, nc.GetNamespace(), nc.Spec.NetworkNamespaceName)
 	if err != nil {
 		vlog.Debug("skipping reservation cleanup, NetworkNamespace not available",
 			"namespace", nc.GetNamespace(), "error", err)
 		return err
 	}
-	subnetID, err := r.Kea.GetSubnetID(ctx, ipv4Prefix)
+	subnetID, err := r.Kea.GetSubnetID(ctx, nn.Status.IPv4Prefix)
 	if err != nil {
 		vlog.Debug("skipping reservation cleanup, subnet not found in KEA",
-			"ipv4Prefix", ipv4Prefix, "error", err)
+			"ipv4Prefix", nn.Status.IPv4Prefix, "error", err)
 		return err
 	}
 	macs := extractMACsFromTypedNetworkConfiguration(nc)

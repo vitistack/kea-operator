@@ -87,29 +87,93 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Check spec.provider early — before adding a finalizer — to avoid claiming
-	// resources that belong to another operator.
-	// Unset/empty = backward compatible, kea-operator handles it (with warning).
-	// "kea" (case-insensitive) = explicitly ours.
-	// Anything else = not ours, skip.
+	// Provider triage — if spec.provider is explicitly set to something other
+	// than 'kea', this NetworkConfiguration belongs to another operator.
+	// Skip silently so we don't spam logs for resources that aren't ours.
 	if vitistackcrdsv1alpha1.IsProviderSet(nc.Spec.Provider) &&
 		!vitistackcrdsv1alpha1.MatchesProvider(nc.Spec.Provider, vitistackcrdsv1alpha1.ProviderNameKea) {
 		log.V(1).Info("skipping NetworkConfiguration, spec.provider is not 'kea'",
 			"provider", nc.Spec.Provider, "name", nc.Name)
 		return ctrl.Result{}, nil
 	}
+
+	// Handle deletion before triage: if the NC has our finalizer, we must
+	// run cleanup regardless of current NN state.
+	if !nc.GetDeletionTimestamp().IsZero() {
+		return r.handleDeletion(ctx, nc, log)
+	}
+
+	// Fetch the NetworkNamespace silently. We need it to decide whether this
+	// NC is actually for us (type=dhcp or unset default) before logging.
+	nn, fallbackUsed, err := r.getNetworkNamespace(ctx, req.Namespace, nc.Spec.NetworkNamespaceName)
+	if err != nil {
+		// NN fetch failed — can't determine ownership. Log at V(1) so we don't
+		// spam for resources that likely aren't ours; the user will see the
+		// error via the NC status if we've already claimed it.
+		log.V(1).Info("unable to fetch NetworkNamespace for triage", "namespace", req.Namespace, "error", err.Error())
+		return ctrl.Result{}, nil
+	}
+
+	// Type triage — if the NN has an explicit non-DHCP allocation type, this
+	// resource belongs to another operator (e.g. static-ip-operator). Skip
+	// silently without emitting any warnings or status updates.
+	if nn.Spec.IPAllocation != nil && nn.Spec.IPAllocation.Type != vitistackcrdsv1alpha1.IPAllocationTypeDHCP {
+		log.V(1).Info("skipping DHCP reconciliation, NetworkNamespace uses a different IP allocation type",
+			"type", nn.Spec.IPAllocation.Type, "networkNamespace", nn.Name)
+		return ctrl.Result{}, nil
+	}
+
+	// --- Past triage: this NC is ours (type=dhcp or defaulting to DHCP). ---
+
+	// Warn (once) about the fallback NN lookup when we're actually handling
+	// this NC, so we don't emit it for resources that belong elsewhere.
+	if fallbackUsed {
+		if _, alreadyWarned := deprecationWarned.LoadOrStore("nnname-"+req.Namespace, true); !alreadyWarned {
+			log.Info("WARNING: NetworkConfiguration has no spec.networkNamespaceName set; "+
+				"falling back to listing NetworkNamespaces in namespace for backward compatibility. "+
+				"Please set spec.networkNamespaceName explicitly.",
+				"namespace", req.Namespace)
+		}
+	}
+
+	// Strict / warning for unset spec.provider on NC.
 	if !vitistackcrdsv1alpha1.IsProviderSet(nc.Spec.Provider) {
-		if _, alreadyWarned := deprecationWarned.LoadOrStore("ncprov-"+nc.Name, true); !alreadyWarned {
+		if viper.GetBool(consts.KEA_STRICT_DEFAULTS) {
+			msg := "spec.provider is not set and KEA_STRICT_DEFAULTS is enabled; refusing to default to 'kea'. Set spec.provider to 'kea' explicitly."
+			log.Info("WARNING: "+msg, "name", nc.Name, "namespace", nc.Namespace)
+			_ = r.setCondition(ctx, nc, viticommonconditions.New(
+				conditionTypeReady, metav1.ConditionFalse, conditionReasonError, msg, nc.GetGeneration(),
+			))
+			_ = r.updateStatus(ctx, nc, "Error", "Failed", msg, nil)
+			return ctrl.Result{}, nil
+		}
+		if _, alreadyWarned := deprecationWarned.LoadOrStore("ncprov-"+nc.Namespace+"/"+nc.Name, true); !alreadyWarned {
 			log.Info("WARNING: NetworkConfiguration does not have spec.provider set. "+
 				"The kea-operator is handling it by default for backward compatibility. "+
-				"Please set spec.provider to 'kea' explicitly.",
+				"Please set spec.provider to 'kea' explicitly. "+
+				"Set KEA_STRICT_DEFAULTS=true to force migration.",
 				"name", nc.Name, "namespace", nc.Namespace)
 		}
 	}
 
-	// Handle deletion
-	if !nc.GetDeletionTimestamp().IsZero() {
-		return r.handleDeletion(ctx, nc, log)
+	// Strict / warning for nil spec.ipAllocation on NN.
+	if nn.Spec.IPAllocation == nil {
+		if viper.GetBool(consts.KEA_STRICT_DEFAULTS) {
+			msg := fmt.Sprintf("NetworkNamespace %s has no spec.ipAllocation and KEA_STRICT_DEFAULTS is enabled; refusing to default to DHCP. Set spec.ipAllocation.type to 'dhcp' explicitly.", nn.Name)
+			log.Info("WARNING: "+msg, "networkNamespace", nn.Name, "namespace", req.Namespace)
+			_ = r.setCondition(ctx, nc, viticommonconditions.New(
+				conditionTypeReady, metav1.ConditionFalse, conditionReasonError, msg, nc.GetGeneration(),
+			))
+			_ = r.updateStatus(ctx, nc, "Error", "Failed", msg, nil)
+			return ctrl.Result{}, nil
+		}
+		if _, alreadyWarned := deprecationWarned.LoadOrStore("ipalloc-"+nn.Namespace+"/"+nn.Name, true); !alreadyWarned {
+			log.Info("WARNING: NetworkNamespace does not have spec.ipAllocation set. "+
+				"Defaulting to DHCP behavior for backward compatibility. "+
+				"Please set spec.ipAllocation.type to 'dhcp' and set spec.provider to 'kea' on NetworkConfigurations. "+
+				"Set KEA_STRICT_DEFAULTS=true to force migration.",
+				"networkNamespace", nn.Name, "namespace", req.Namespace)
+		}
 	}
 
 	// Ensure finalizer
@@ -126,32 +190,6 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", nc.GetGeneration(),
 		))
 		_ = r.updateStatus(ctx, nc, "Reconciling", "InProgress", "Reconciliation in progress", nil)
-	}
-
-	// Get NetworkNamespace and check IP allocation provider
-	nn, err := r.getNetworkNamespace(ctx, req.Namespace, nc.Spec.NetworkNamespaceName)
-	if err != nil {
-		log.Error(err, "failed to get NetworkNamespace", "namespace", req.Namespace)
-		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("NetworkNamespace not found: %v", err), nil)
-		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
-	}
-
-	// Skip reconciliation if the NetworkNamespace uses a non-DHCP type.
-	// When ipAllocation is nil, default behavior is DHCP (backward compatible).
-	if nn.Spec.IPAllocation != nil && nn.Spec.IPAllocation.Type != vitistackcrdsv1alpha1.IPAllocationTypeDHCP {
-		log.V(1).Info("skipping DHCP reconciliation, NetworkNamespace uses a different IP allocation type",
-			"type", nn.Spec.IPAllocation.Type, "networkNamespace", nn.Name)
-		return ctrl.Result{}, nil
-	}
-
-	// Warn when ipAllocation is not explicitly configured on the NetworkNamespace.
-	if nn.Spec.IPAllocation == nil {
-		if _, alreadyWarned := deprecationWarned.LoadOrStore("ipalloc-"+nn.Name, true); !alreadyWarned {
-			log.Info("WARNING: NetworkNamespace does not have spec.ipAllocation set. "+
-				"Defaulting to DHCP behavior. Please set spec.ipAllocation.type to 'dhcp' "+
-				"and set spec.provider to 'kea' on NetworkConfigurations.",
-				"networkNamespace", nn.Name, "namespace", req.Namespace)
-		}
 	}
 
 	ipv4Prefix := nn.Status.IPv4Prefix
@@ -380,31 +418,28 @@ func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) erro
 // namespace. When networkNamespaceName is specified, it fetches that specific
 // NetworkNamespace by name. Otherwise, it falls back to listing all
 // NetworkNamespaces in the namespace and picking the first one (legacy
-// behaviour, with a deprecation warning).
-func (r *NetworkConfigurationReconciler) getNetworkNamespace(ctx context.Context, namespace, networkNamespaceName string) (*vitistackcrdsv1alpha1.NetworkNamespace, error) {
+// behaviour). The second return value reports whether the fallback list path
+// was used, so callers can decide whether/when to warn — this lets the caller
+// silently triage resources that belong to another operator without emitting
+// spurious deprecation warnings.
+func (r *NetworkConfigurationReconciler) getNetworkNamespace(ctx context.Context, namespace, networkNamespaceName string) (*vitistackcrdsv1alpha1.NetworkNamespace, bool, error) {
 	var nn vitistackcrdsv1alpha1.NetworkNamespace
 
 	if networkNamespaceName != "" {
-		// Direct lookup by name
 		if err := r.Get(ctx, client.ObjectKey{Name: networkNamespaceName, Namespace: namespace}, &nn); err != nil {
-			return nil, fmt.Errorf("failed to get NetworkNamespace %s in namespace %s: %w", networkNamespaceName, namespace, err)
+			return nil, false, fmt.Errorf("failed to get NetworkNamespace %s in namespace %s: %w", networkNamespaceName, namespace, err)
 		}
-	} else {
-		// Legacy fallback: list and pick the first one
-		if _, alreadyWarned := deprecationWarned.LoadOrStore(namespace, true); !alreadyWarned {
-			vlog.Warn("DEPRECATION: networkNamespaceName not set on NetworkConfiguration, falling back to listing NetworkNamespaces in namespace. Please set spec.networkNamespaceName.", "namespace", namespace)
-		}
-		nnList := &vitistackcrdsv1alpha1.NetworkNamespaceList{}
-		if err := r.List(ctx, nnList, client.InNamespace(namespace)); err != nil {
-			return nil, err
-		}
-		if len(nnList.Items) == 0 {
-			return nil, fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
-		}
-		nn = nnList.Items[0]
+		return &nn, false, nil
 	}
 
-	return &nn, nil
+	nnList := &vitistackcrdsv1alpha1.NetworkNamespaceList{}
+	if err := r.List(ctx, nnList, client.InNamespace(namespace)); err != nil {
+		return nil, true, err
+	}
+	if len(nnList.Items) == 0 {
+		return nil, true, fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
+	}
+	return &nnList.Items[0], true, nil
 }
 
 // extractMACsFromTypedNetworkConfiguration reads MAC addresses strictly from
@@ -448,7 +483,7 @@ func extractMACsFromTypedNetworkConfiguration(networkconf *vitistackcrdsv1alpha1
 // It reads MACs from the typed NetworkConfiguration, resolves the subnet-id for
 // the namespace prefix, and issues reservation deletions in Kea.
 func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration) error {
-	nn, err := r.getNetworkNamespace(ctx, nc.GetNamespace(), nc.Spec.NetworkNamespaceName)
+	nn, _, err := r.getNetworkNamespace(ctx, nc.GetNamespace(), nc.Spec.NetworkNamespaceName)
 	if err != nil {
 		vlog.Debug("skipping reservation cleanup, NetworkNamespace not available",
 			"namespace", nc.GetNamespace(), "error", err)

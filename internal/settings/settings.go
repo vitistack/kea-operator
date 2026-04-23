@@ -17,6 +17,7 @@ func Init() {
 	viper.SetDefault(consts.DEVELOPMENT, false)
 	viper.SetDefault(consts.KEA_DISABLE_KEEPALIVES, true)
 	viper.SetDefault(consts.KEA_REQUIRE_CLIENT_CLASSES, "biosclients,ueficlients,ipxeclients")
+	viper.SetDefault(consts.KEA_STRICT_DEFAULTS, false)
 
 	dotenv.LoadDotEnv()
 
@@ -50,6 +51,7 @@ func printEnvironmentSettings() {
 		consts.KEA_TLS_SECRET_NAMESPACE,
 		consts.KEA_DISABLE_KEEPALIVES,
 		consts.KEA_REQUIRE_CLIENT_CLASSES,
+		consts.KEA_STRICT_DEFAULTS,
 	}
 
 	for _, s := range settings {

@@ -29,4 +29,11 @@ const (
 
 	// Pool configuration for subnet creation
 	KEA_REQUIRE_CLIENT_CLASSES = "KEA_REQUIRE_CLIENT_CLASSES" // comma-separated list of client classes
+
+	// KEA_STRICT_DEFAULTS, when true, makes the operator refuse to claim
+	// NetworkConfigurations with an unset spec.provider or NetworkNamespaces
+	// with a nil spec.ipAllocation. When false (default), the operator treats
+	// unset values as the DHCP default for backward compatibility and logs a
+	// deprecation notice once per resource.
+	KEA_STRICT_DEFAULTS = "KEA_STRICT_DEFAULTS"
 )

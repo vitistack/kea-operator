@@ -7,6 +7,16 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// Field names + sentinel MAC reused across this test file. Extracted as
+// constants so goconst stays quiet and so a typo in one fixture doesn't
+// silently misalign the test data with the production extractor's
+// expectations.
+const (
+	fieldNetworkInterfaces = "networkInterfaces"
+	fieldMACAddress        = "macAddress"
+	macDuplicateFixture    = "aa:bb:cc:dd:ee:0c"
+)
+
 // setEquals compares slice of strings against a wanted set.
 func setEquals(got []string, want map[string]struct{}) (bool, string) {
 	if len(got) != len(want) {
@@ -42,21 +52,21 @@ func TestExtractMACs_Scenarios(t *testing.T) {
 		{
 			name: "reads only spec.networkInterfaces[].macAddress and ignores others",
 			spec: map[string]any{
-				"networkInterfaces": []any{
-					map[string]any{"macAddress": "AA-BB-CC-DD-EE-FF"}, // normalized -> aa:bb:cc:dd:ee:ff
-					map[string]any{"macAddress": "aa:bb:cc:dd:ee:01"},
+				fieldNetworkInterfaces: []any{
+					map[string]any{fieldMACAddress: "AA-BB-CC-DD-EE-FF"}, // normalized -> aa:bb:cc:dd:ee:ff
+					map[string]any{fieldMACAddress: "aa:bb:cc:dd:ee:01"},
 					map[string]any{"name": "eth0"}, // no macAddress => ignored
 				},
 				// should be ignored
-				"mac":        "aa:bb:cc:dd:ee:02",
-				"macAddress": "aa:bb:cc:dd:ee:03",
-				"macs":       []any{"aa:bb:cc:dd:ee:04"},
+				"mac":           "aa:bb:cc:dd:ee:02",
+				fieldMACAddress: "aa:bb:cc:dd:ee:03",
+				"macs":          []any{"aa:bb:cc:dd:ee:04"},
 			},
 			status: map[string]any{
 				// should be ignored
-				"networkInterfaces": []any{map[string]any{"macAddress": "aa:bb:cc:dd:ee:05"}},
-				"mac":               "aa:bb:cc:dd:ee:06",
-				"macAddress":        "aa:bb:cc:dd:ee:07",
+				fieldNetworkInterfaces: []any{map[string]any{fieldMACAddress: "aa:bb:cc:dd:ee:05"}},
+				"mac":                  "aa:bb:cc:dd:ee:06",
+				fieldMACAddress:        "aa:bb:cc:dd:ee:07",
 			},
 			want: map[string]struct{}{
 				"aa:bb:cc:dd:ee:ff": {},
@@ -71,9 +81,9 @@ func TestExtractMACs_Scenarios(t *testing.T) {
 		{
 			name: "normalizes and validates (lowercase, '-' -> ':')",
 			spec: map[string]any{
-				"networkInterfaces": []any{
-					map[string]any{"macAddress": "AA-BB-CC-DD-EE-0A"},
-					map[string]any{"macAddress": "aa:bb:cc:dd:ee:0b"},
+				fieldNetworkInterfaces: []any{
+					map[string]any{fieldMACAddress: "AA-BB-CC-DD-EE-0A"},
+					map[string]any{fieldMACAddress: "aa:bb:cc:dd:ee:0b"},
 				},
 			},
 			want: map[string]struct{}{
@@ -84,16 +94,16 @@ func TestExtractMACs_Scenarios(t *testing.T) {
 		{
 			name: "deduplicates and ignores invalid values",
 			spec: map[string]any{
-				"networkInterfaces": []any{
-					map[string]any{"macAddress": "aa:bb:cc:dd:ee:0c"},
-					map[string]any{"macAddress": "aa:bb:cc:dd:ee:0c"}, // duplicate
-					map[string]any{"macAddress": "not-a-mac"},         // invalid
-					map[string]any{"macAddress": "aa:bb:cc:dd:ee"},    // invalid (short)
-					map[string]any{"name": "eth1"},                    // missing macAddress
+				fieldNetworkInterfaces: []any{
+					map[string]any{fieldMACAddress: macDuplicateFixture},
+					map[string]any{fieldMACAddress: macDuplicateFixture}, // duplicate
+					map[string]any{fieldMACAddress: "not-a-mac"},         // invalid
+					map[string]any{fieldMACAddress: "aa:bb:cc:dd:ee"},    // invalid (short)
+					map[string]any{"name": "eth1"},                       // missing macAddress
 				},
 			},
 			want: map[string]struct{}{
-				"aa:bb:cc:dd:ee:0c": {},
+				macDuplicateFixture: {},
 			},
 		},
 	}

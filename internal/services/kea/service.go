@@ -9,6 +9,18 @@ import (
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 )
 
+// Kea Control Agent JSON field names. Kept as constants so a typo can't drift
+// between the request builder and the response parser, and so goconst doesn't
+// flag the repeated literals. keaFieldHWAddress doubles as the value passed
+// for identifier-type — it's the same string in both contexts.
+const (
+	keaFieldSubnetID       = "subnet-id"
+	keaFieldHWAddress      = "hw-address"
+	keaFieldIPAddress      = "ip-address"
+	keaFieldIdentifier     = "identifier"
+	keaFieldIdentifierType = "identifier-type"
+)
+
 // Service wraps Kea operations used by the controller.
 type Service struct {
 	Client keainterface.KeaClient
@@ -335,10 +347,10 @@ func (s *Service) DeleteReservationForMAC(ctx context.Context, mac string, subne
 	delReq := keamodels.Request{
 		Command: "reservation-del",
 		Args: map[string]any{
-			"subnet-id":        subnetID,
-			"identifier-type":  "hw-address",
-			"identifier":       mac,
-			"operation-target": "all",
+			keaFieldSubnetID:       subnetID,
+			keaFieldIdentifierType: keaFieldHWAddress,
+			keaFieldIdentifier:     mac,
+			"operation-target":     "all",
 		},
 	}
 	resp, err := s.Client.Send(ctx, delReq)
@@ -362,11 +374,11 @@ func (s *Service) EnsureReservationForMACIP(ctx context.Context, mac string, sub
 		return false, nil // already exists, nothing created
 	}
 	reservation := map[string]any{
-		"subnet-id":  subnetID,
-		"hw-address": mac,
+		keaFieldSubnetID:  subnetID,
+		keaFieldHWAddress: mac,
 	}
 	if ip := strings.TrimSpace(ipv4); ip != "" {
-		reservation["ip-address"] = ip
+		reservation[keaFieldIPAddress] = ip
 	}
 	addReq := keamodels.Request{
 		Command: "reservation-add",
@@ -396,8 +408,8 @@ func (s *Service) macReservationExists(ctx context.Context, mac string, subnetID
 	primary := keamodels.Request{
 		Command: "reservation-get-by-id",
 		Args: map[string]any{
-			"identifier-type": "hw-address",
-			"identifier":      mac,
+			keaFieldIdentifierType: keaFieldHWAddress,
+			keaFieldIdentifier:     mac,
 		},
 	}
 	if resp, err := s.Client.Send(ctx, primary); err == nil {
@@ -408,8 +420,8 @@ func (s *Service) macReservationExists(ctx context.Context, mac string, subnetID
 					if !ok {
 						continue
 					}
-					if hw, ok2 := hm["hw-address"].(string); ok2 && strings.EqualFold(hw, mac) {
-						if sid, ok3 := hm["subnet-id"]; ok3 {
+					if hw, ok2 := hm[keaFieldHWAddress].(string); ok2 && strings.EqualFold(hw, mac) {
+						if sid, ok3 := hm[keaFieldSubnetID]; ok3 {
 							switch v := sid.(type) {
 							case float64:
 								if int(v) != subnetID {
@@ -434,7 +446,7 @@ func (s *Service) macReservationExists(ctx context.Context, mac string, subnetID
 	}
 
 	// 2. Fallback: reservation-get-all (scan hosts list for match)
-	fallback := keamodels.Request{Command: "reservation-get-all", Args: map[string]any{"subnet-id": subnetID}}
+	fallback := keamodels.Request{Command: "reservation-get-all", Args: map[string]any{keaFieldSubnetID: subnetID}}
 	resp2, err2 := s.Client.Send(ctx, fallback)
 	if err2 != nil || resp2.Result != 0 {
 		return false
@@ -445,7 +457,7 @@ func (s *Service) macReservationExists(ctx context.Context, mac string, subnetID
 			if !ok {
 				continue
 			}
-			if hw, ok2 := hm["hw-address"].(string); ok2 && strings.EqualFold(hw, mac) {
+			if hw, ok2 := hm[keaFieldHWAddress].(string); ok2 && strings.EqualFold(hw, mac) {
 				return true
 			}
 		}
@@ -462,7 +474,7 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 	}
 	primary := keamodels.Request{
 		Command: "lease4-get-by-hw-address",
-		Args:    map[string]any{"hw-address": mac},
+		Args:    map[string]any{keaFieldHWAddress: mac},
 	}
 	if resp, err := s.Client.Send(ctx, primary); err == nil {
 		if resp.Result == 0 {
@@ -476,12 +488,12 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 					if !ok {
 						continue
 					}
-					hw, _ := m["hw-address"].(string)
+					hw, _ := m[keaFieldHWAddress].(string)
 					if !strings.EqualFold(strings.TrimSpace(hw), mac) {
 						// Be defensive in case server returns extra entries
 						continue
 					}
-					ip, _ := m["ip-address"].(string)
+					ip, _ := m[keaFieldIPAddress].(string)
 					if ip == "" {
 						continue
 					}
@@ -494,7 +506,7 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 						cltt = float64(v)
 					}
 					sid := 0
-					switch v := m["subnet-id"].(type) {
+					switch v := m[keaFieldSubnetID].(type) {
 					case float64:
 						sid = int(v)
 					case int:
@@ -512,13 +524,13 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 			} else if l, ok := resp.Arguments["leases"].(map[string]any); ok {
 				// Some deployments might return a single lease object; keep legacy support.
 				ip := ""
-				if v, ok2 := l["ip-address"].(string); ok2 {
+				if v, ok2 := l[keaFieldIPAddress].(string); ok2 {
 					ip = v
 				}
 				sid := 0
-				if v, ok2 := l["subnet-id"].(float64); ok2 {
+				if v, ok2 := l[keaFieldSubnetID].(float64); ok2 {
 					sid = int(v)
-				} else if v2, ok3 := l["subnet-id"].(int); ok3 {
+				} else if v2, ok3 := l[keaFieldSubnetID].(int); ok3 {
 					sid = v2
 				}
 				if ip != "" {
@@ -532,8 +544,8 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 	fb := keamodels.Request{
 		Command: "reservation-get-by-id",
 		Args: map[string]any{
-			"identifier-type": "hw-address",
-			"identifier":      mac,
+			keaFieldIdentifierType: keaFieldHWAddress,
+			keaFieldIdentifier:     mac,
 		},
 	}
 	if resp, err := s.Client.Send(ctx, fb); err == nil && resp.Result == 0 {
@@ -543,11 +555,11 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 				if !ok {
 					continue
 				}
-				if v, ok2 := hm["ip-address"].(string); ok2 && v != "" {
+				if v, ok2 := hm[keaFieldIPAddress].(string); ok2 && v != "" {
 					sid := 0
-					if sv, ok3 := hm["subnet-id"].(float64); ok3 {
+					if sv, ok3 := hm[keaFieldSubnetID].(float64); ok3 {
 						sid = int(sv)
-					} else if sv2, ok4 := hm["subnet-id"].(int); ok4 {
+					} else if sv2, ok4 := hm[keaFieldSubnetID].(int); ok4 {
 						sid = sv2
 					}
 					return v, sid, nil

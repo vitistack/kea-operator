@@ -32,6 +32,7 @@ import (
 	viticommonfinalizers "github.com/vitistack/common/pkg/operator/finalizers"
 	reconcileutil "github.com/vitistack/common/pkg/operator/reconcileutil"
 	vitistackcrdsv1alpha1 "github.com/vitistack/common/pkg/v1alpha1"
+	vitistackcrdsv1alpha2 "github.com/vitistack/common/pkg/v1alpha2"
 	"github.com/vitistack/kea-operator/internal/consts"
 	keaservice "github.com/vitistack/kea-operator/internal/services/kea"
 	subnetutil "github.com/vitistack/kea-operator/internal/util/subnet"
@@ -190,6 +191,13 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonReconciling, "reconciling", nc.GetGeneration(),
 		))
 		_ = r.updateStatus(ctx, nc, "Reconciling", "InProgress", "Reconciliation in progress", nil)
+	}
+
+	// Gate on provisioningPhase — wait until the network segment is provisioned
+	if nn.Status.ProvisioningPhase != "" && nn.Status.ProvisioningPhase != string(vitistackcrdsv1alpha2.ProvisioningPhaseReady) {
+		log.V(1).Info("NetworkNamespace not yet provisioned, waiting",
+			"networkNamespace", nn.Name, "provisioningPhase", nn.Status.ProvisioningPhase)
+		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
 	}
 
 	ipv4Prefix := nn.Status.IPv4Prefix

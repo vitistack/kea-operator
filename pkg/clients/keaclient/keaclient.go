@@ -87,7 +87,10 @@ func (kc *keaClient) applyOptions(options ...KeaOption) {
 
 func (kc *keaClient) applyDefaults() {
 	kc.Context = context.Background()
-	kc.Timeout = 10 * time.Second
+	// 30s gives the Kea Control Agent — which serializes commands — room to
+	// answer under load before we trip a timeout and force a failover.
+	// Override via KEA_TIMEOUT_SECONDS.
+	kc.Timeout = 30 * time.Second
 	// Default plain client; may be overridden by buildHTTPClient()
 	kc.HttpClient = &http.Client{Timeout: kc.Timeout}
 }
@@ -135,9 +138,7 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 		resp, err := c.HttpClient.Do(req)
 		if err != nil {
 			if i == 0 && len(urls) > 1 {
-				vlog.Logger().Warn("Primary KEA server failed, trying secondary ",
-					" primary: ", baseUrl,
-					" error: ", err.Error())
+				vlog.Warnf("Primary KEA server failed, trying secondary. primary=%s error=%v", baseUrl, err)
 			}
 			lastErr = fmt.Errorf("request failed for %s: %w", base, err)
 			continue
@@ -157,7 +158,7 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 
 		// Log successful failover if we're using secondary
 		if i > 0 {
-			vlog.Logger().Info("Successfully failed over to secondary KEA server", "url", baseUrl)
+			vlog.Infof("Successfully failed over to secondary KEA server: url=%s", baseUrl)
 		}
 		c.currentUrl = baseUrl
 

@@ -61,7 +61,15 @@ const (
 	conditionReasonConfigured  = "Configured"
 	conditionReasonError       = "Error"
 
-	RequeueDelay = 5 * time.Second
+	// RequeueDelaySuccess is the resync interval after a successful reconcile.
+	// The watch on NetworkConfiguration already triggers a reconcile on spec
+	// changes, so this is just a periodic safety net to catch out-of-band
+	// drift in Kea state. Keep it long to avoid hammering the Kea API.
+	RequeueDelaySuccess = 5 * time.Minute
+	// RequeueDelayError is the retry delay after a transient error. Short
+	// enough to recover quickly from a flapping Kea peer, long enough not to
+	// pile on if the Kea Control Agent is overloaded.
+	RequeueDelayError = 30 * time.Second
 )
 
 // deprecationWarned tracks namespaces for which the deprecation warning has already been logged,
@@ -196,7 +204,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	if ipv4Prefix == "" {
 		log.Error(nil, "NetworkNamespace missing status.IPv4Prefix", "namespace", req.Namespace, "networkNamespace", nn.Name)
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("NetworkNamespace %s missing status.IPv4Prefix", nn.Name), nil)
-		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+		return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
 	}
 
 	// Extract MACs
@@ -212,7 +220,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	if err != nil {
 		log.Error(err, "failed to calculate pool from CIDR", "ipv4Prefix", ipv4Prefix)
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("Invalid CIDR: %v", err), nil)
-		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+		return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
 	}
 
 	// Get require-client-classes from configuration
@@ -239,18 +247,15 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("subnet error: %v", err), nc.GetGeneration(),
 		))
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", fmt.Sprintf("Subnet error: %v", err), nil)
-		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+		return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
 	}
 	if created {
 		log.Info("created new Kea subnet", "subnet", ipv4Prefix, "subnetID", subnetID)
 	}
 
-	// Get subnet details (gateway, DNS, etc.)
-	subnetInfo, err := r.Kea.GetSubnetInfo(ctx, subnetID)
-	if err != nil {
-		log.Error(err, "failed to get subnet details", "subnetID", subnetID)
-		// Non-fatal - continue without detailed subnet info
-	}
+	// Get subnet details (gateway, DNS, etc.). Subnet info lookup is non-fatal —
+	// reservations still proceed without gateway/DNS, just with less status detail.
+	subnetID, subnetInfo := r.resolveSubnetInfo(ctx, subnetID, ipv4Prefix, log)
 
 	// Process MAC reservations
 	macToIP, macToSubnetID, errs := r.processMACReservations(ctx, macs, subnetID, ipv4Prefix, log)
@@ -264,7 +269,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("reservation errors: %s", strings.Join(errs, "; ")), nc.GetGeneration(),
 		))
 		_ = r.updateStatus(ctx, nc, "Error", "Failed", strings.Join(errs, "; "), statusInterfaces)
-		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+		return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
 	}
 
 	// Build success message
@@ -274,7 +279,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", nc.GetGeneration(),
 	))
 	_ = r.updateStatus(ctx, nc, "Ready", "Success", statusMsg, statusInterfaces)
-	return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+	return ctrl.Result{RequeueAfter: RequeueDelaySuccess}, nil
 }
 
 // handleDeletion handles the deletion of a NetworkConfiguration
@@ -286,6 +291,30 @@ func (r *NetworkConfigurationReconciler) handleDeletion(ctx context.Context, nc 
 		return reconcileutil.Requeue(err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// resolveSubnetInfo fetches subnet details for subnetID, transparently recovering
+// from a stale ID. When the previous reconcile ran against the secondary Kea peer
+// during a failover, the ID we have may not exist on the primary; we re-resolve
+// from CIDR and retry once. Returns the (possibly updated) subnet ID and the
+// info, or a nil info if it can't be resolved (non-fatal).
+func (r *NetworkConfigurationReconciler) resolveSubnetInfo(ctx context.Context, subnetID int, ipv4Prefix string, log logr.Logger) (int, *keaservice.SubnetInfo) {
+	subnetInfo, err := r.Kea.GetSubnetInfo(ctx, subnetID)
+	if err == nil {
+		return subnetID, subnetInfo
+	}
+	errLower := strings.ToLower(err.Error())
+	if strings.Contains(errLower, "no subnet with id") || strings.Contains(errLower, "not found") {
+		if reID, reErr := r.Kea.GetSubnetID(ctx, ipv4Prefix); reErr == nil && reID != subnetID {
+			log.Info("stale subnet ID, re-resolved from CIDR", "oldID", subnetID, "newID", reID, "cidr", ipv4Prefix)
+			if info, err2 := r.Kea.GetSubnetInfo(ctx, reID); err2 == nil {
+				return reID, info
+			}
+			subnetID = reID
+		}
+	}
+	log.Error(err, "failed to get subnet details", "subnetID", subnetID)
+	return subnetID, nil
 }
 
 // processMACReservations processes all MAC address reservations

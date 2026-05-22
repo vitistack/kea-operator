@@ -279,6 +279,14 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", nc.GetGeneration(),
 	))
 	_ = r.updateStatus(ctx, nc, "Ready", "Success", statusMsg, statusInterfaces)
+
+	// If not every MAC has resolved to an IP yet, the reservation is still
+	// settling. Re-check on the short interval instead of waiting the full
+	// success resync, so the IP lands in status — and therefore in the
+	// downstream Machine's public IPs — in seconds rather than minutes.
+	if len(macToIP) < len(macs) {
+		return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
+	}
 	return ctrl.Result{RequeueAfter: RequeueDelaySuccess}, nil
 }
 

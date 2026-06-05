@@ -36,4 +36,9 @@ const (
 	// unset values as the DHCP default for backward compatibility and logs a
 	// deprecation notice once per resource.
 	KEA_STRICT_DEFAULTS = "KEA_STRICT_DEFAULTS"
+
+	// MAX_CONCURRENT_RECONCILES is the maximum number of reconciliations run in
+	// parallel per controller. The workqueue still serializes by object key, so
+	// concurrency only applies across distinct objects. Defaults to 5 when unset.
+	MAX_CONCURRENT_RECONCILES = "MAX_CONCURRENT_RECONCILES"
 )

@@ -20,7 +20,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -447,8 +450,26 @@ func NewNetworkConfigurationReconciler(mgr ctrl.Manager, keaClient keainterface.
 func (r *NetworkConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&vitistackcrdsv1alpha1.NetworkConfiguration{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles()}).
 		Named("networkconfiguration").
 		Complete(r)
+}
+
+// maxConcurrentReconciles returns the number of parallel reconciliations per
+// controller, read from MAX_CONCURRENT_RECONCILES. Defaults to 5 when unset or
+// invalid; never returns less than 1. The workqueue serializes by object key,
+// so concurrency only applies across distinct objects.
+func maxConcurrentReconciles() int {
+	const defaultMaxConcurrent = 5
+	v := strings.TrimSpace(os.Getenv(consts.MAX_CONCURRENT_RECONCILES))
+	if v == "" {
+		return defaultMaxConcurrent
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return defaultMaxConcurrent
+	}
+	return n
 }
 
 // getNetworkNamespace fetches the NetworkNamespace for the given Kubernetes

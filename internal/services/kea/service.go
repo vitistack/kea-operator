@@ -167,11 +167,19 @@ func (s *Service) GetOrCreateSubnet(ctx context.Context, cfg keamodels.SubnetCon
 
 	// If not found, create it
 	if strings.Contains(err.Error(), "no matching Kea subnet") {
-		subnetID, err = s.CreateSubnet(ctx, cfg)
-		if err != nil {
-			return 0, false, fmt.Errorf("failed to create subnet: %w", err)
+		newID, createErr := s.CreateSubnet(ctx, cfg)
+		if createErr == nil {
+			return newID, true, nil // Subnet created
 		}
-		return subnetID, true, nil // Subnet created
+		// HA failover or a concurrent reconcile may have created the subnet
+		// on the other Kea peer between our list and create. Re-resolve by
+		// CIDR instead of bubbling up an error.
+		if strings.Contains(strings.ToLower(createErr.Error()), "already exists") {
+			if existingID, getErr := s.GetSubnetID(ctx, cfg.Subnet); getErr == nil {
+				return existingID, false, nil
+			}
+		}
+		return 0, false, fmt.Errorf("failed to create subnet: %w", createErr)
 	}
 
 	// Some other error occurred

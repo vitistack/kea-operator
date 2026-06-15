@@ -148,44 +148,10 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
-	// Strict / warning for unset spec.provider on NC.
-	if !vitistackcrdsv1alpha1.IsProviderSet(nc.Spec.Provider) {
-		if viper.GetBool(consts.KEA_STRICT_DEFAULTS) {
-			msg := "spec.provider is not set and KEA_STRICT_DEFAULTS is enabled; refusing to default to 'kea'. Set spec.provider to 'kea' explicitly."
-			log.Info("WARNING: "+msg, "name", nc.Name, "namespace", nc.Namespace)
-			_ = r.setCondition(ctx, nc, viticommonconditions.New(
-				conditionTypeReady, metav1.ConditionFalse, conditionReasonError, msg, nc.GetGeneration(),
-			))
-			_ = r.updateStatus(ctx, nc, "Error", "Failed", msg, nil)
-			return ctrl.Result{}, nil
-		}
-		if _, alreadyWarned := deprecationWarned.LoadOrStore("ncprov-"+nc.Namespace+"/"+nc.Name, true); !alreadyWarned {
-			log.Info("WARNING: NetworkConfiguration does not have spec.provider set. "+
-				"The kea-operator is handling it by default for backward compatibility. "+
-				"Please set spec.provider to 'kea' explicitly. "+
-				"Set KEA_STRICT_DEFAULTS=true to force migration.",
-				"name", nc.Name, "namespace", nc.Namespace)
-		}
-	}
-
-	// Strict / warning for nil spec.ipAllocation on NN.
-	if nn.Spec.IPAllocation == nil {
-		if viper.GetBool(consts.KEA_STRICT_DEFAULTS) {
-			msg := fmt.Sprintf("NetworkNamespace %s has no spec.ipAllocation and KEA_STRICT_DEFAULTS is enabled; refusing to default to DHCP. Set spec.ipAllocation.type to 'dhcp' explicitly.", nn.Name)
-			log.Info("WARNING: "+msg, "networkNamespace", nn.Name, "namespace", req.Namespace)
-			_ = r.setCondition(ctx, nc, viticommonconditions.New(
-				conditionTypeReady, metav1.ConditionFalse, conditionReasonError, msg, nc.GetGeneration(),
-			))
-			_ = r.updateStatus(ctx, nc, "Error", "Failed", msg, nil)
-			return ctrl.Result{}, nil
-		}
-		if _, alreadyWarned := deprecationWarned.LoadOrStore("ipalloc-"+nn.Namespace+"/"+nn.Name, true); !alreadyWarned {
-			log.Info("WARNING: NetworkNamespace does not have spec.ipAllocation set. "+
-				"Defaulting to DHCP behavior for backward compatibility. "+
-				"Please set spec.ipAllocation.type to 'dhcp' and set spec.provider to 'kea' on NetworkConfigurations. "+
-				"Set KEA_STRICT_DEFAULTS=true to force migration.",
-				"networkNamespace", nn.Name, "namespace", req.Namespace)
-		}
+	// Strict / warning gating for unset spec.provider (NC) and nil
+	// spec.ipAllocation (NN). Stops reconciliation when strict mode rejects it.
+	if stop := r.enforceStrictDefaults(ctx, nc, nn, req, log); stop {
+		return ctrl.Result{}, nil
 	}
 
 	// Ensure finalizer
@@ -478,6 +444,60 @@ func maxConcurrentReconciles() int {
 		return defaultMaxConcurrent
 	}
 	return n
+}
+
+// enforceStrictDefaults applies KEA_STRICT_DEFAULTS gating and emits one-time
+// deprecation warnings for an unset spec.provider (NetworkConfiguration) and a
+// nil spec.ipAllocation (NetworkNamespace). It returns true when strict mode
+// rejects the resource and reconciliation should stop.
+func (r *NetworkConfigurationReconciler) enforceStrictDefaults(
+	ctx context.Context,
+	nc *vitistackcrdsv1alpha1.NetworkConfiguration,
+	nn *vitistackcrdsv1alpha1.NetworkNamespace,
+	req ctrl.Request,
+	log logr.Logger,
+) bool {
+	// Strict / warning for unset spec.provider on NC.
+	if !vitistackcrdsv1alpha1.IsProviderSet(nc.Spec.Provider) {
+		if viper.GetBool(consts.KEA_STRICT_DEFAULTS) {
+			msg := "spec.provider is not set and KEA_STRICT_DEFAULTS is enabled; refusing to default to 'kea'. Set spec.provider to 'kea' explicitly."
+			log.Info("WARNING: "+msg, "name", nc.Name, "namespace", nc.Namespace)
+			_ = r.setCondition(ctx, nc, viticommonconditions.New(
+				conditionTypeReady, metav1.ConditionFalse, conditionReasonError, msg, nc.GetGeneration(),
+			))
+			_ = r.updateStatus(ctx, nc, "Error", "Failed", msg, nil)
+			return true
+		}
+		if _, alreadyWarned := deprecationWarned.LoadOrStore("ncprov-"+nc.Namespace+"/"+nc.Name, true); !alreadyWarned {
+			log.Info("WARNING: NetworkConfiguration does not have spec.provider set. "+
+				"The kea-operator is handling it by default for backward compatibility. "+
+				"Please set spec.provider to 'kea' explicitly. "+
+				"Set KEA_STRICT_DEFAULTS=true to force migration.",
+				"name", nc.Name, "namespace", nc.Namespace)
+		}
+	}
+
+	// Strict / warning for nil spec.ipAllocation on NN.
+	if nn.Spec.IPAllocation == nil {
+		if viper.GetBool(consts.KEA_STRICT_DEFAULTS) {
+			msg := fmt.Sprintf("NetworkNamespace %s has no spec.ipAllocation and KEA_STRICT_DEFAULTS is enabled; refusing to default to DHCP. Set spec.ipAllocation.type to 'dhcp' explicitly.", nn.Name)
+			log.Info("WARNING: "+msg, "networkNamespace", nn.Name, "namespace", req.Namespace)
+			_ = r.setCondition(ctx, nc, viticommonconditions.New(
+				conditionTypeReady, metav1.ConditionFalse, conditionReasonError, msg, nc.GetGeneration(),
+			))
+			_ = r.updateStatus(ctx, nc, "Error", "Failed", msg, nil)
+			return true
+		}
+		if _, alreadyWarned := deprecationWarned.LoadOrStore("ipalloc-"+nn.Namespace+"/"+nn.Name, true); !alreadyWarned {
+			log.Info("WARNING: NetworkNamespace does not have spec.ipAllocation set. "+
+				"Defaulting to DHCP behavior for backward compatibility. "+
+				"Please set spec.ipAllocation.type to 'dhcp' and set spec.provider to 'kea' on NetworkConfigurations. "+
+				"Set KEA_STRICT_DEFAULTS=true to force migration.",
+				"networkNamespace", nn.Name, "namespace", req.Namespace)
+		}
+	}
+
+	return false
 }
 
 // getNetworkNamespace fetches the NetworkNamespace for the given Kubernetes

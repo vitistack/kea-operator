@@ -208,7 +208,7 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	if nn.Status.ProvisioningPhase != "" && nn.Status.ProvisioningPhase != string(vitistackcrdsv1alpha2.ProvisioningPhaseReady) {
 		log.V(1).Info("NetworkNamespace not yet provisioned, waiting",
 			"networkNamespace", nn.Name, "provisioningPhase", nn.Status.ProvisioningPhase)
-		return ctrl.Result{RequeueAfter: RequeueDelay}, nil
+		return ctrl.Result{RequeueAfter: RequeueDelaySuccess}, nil
 	}
 
 	ipv4Prefix := nn.Status.IPv4Prefix

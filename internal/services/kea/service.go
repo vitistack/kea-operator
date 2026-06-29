@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
@@ -24,10 +25,24 @@ const (
 // Service wraps Kea operations used by the controller.
 type Service struct {
 	Client keainterface.KeaClient
+
+	// subnetLocks serializes GetOrCreateSubnet for the same subnet CIDR within
+	// this process. Multiple NetworkConfigurations that share a NetworkNamespace
+	// prefix reconcile concurrently — the workqueue only serializes per object
+	// key — so without this each would independently issue subnet4-add for the
+	// same prefix. Keyed by CIDR; the number of entries is bounded by the number
+	// of distinct subnets.
+	subnetLocks sync.Map // map[string]*sync.Mutex
 }
 
 func New(client keainterface.KeaClient) *Service {
 	return &Service{Client: client}
+}
+
+// subnetLock returns the per-CIDR mutex used to serialize subnet get-or-create.
+func (s *Service) subnetLock(cidr string) *sync.Mutex {
+	m, _ := s.subnetLocks.LoadOrStore(cidr, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // CreateSubnet creates a new IPv4 subnet in Kea DHCP server.
@@ -159,31 +174,39 @@ func (s *Service) getNextSubnetID(ctx context.Context) int {
 
 // GetOrCreateSubnet returns the subnet ID for the given prefix, creating the subnet if it doesn't exist.
 func (s *Service) GetOrCreateSubnet(ctx context.Context, cfg keamodels.SubnetConfig) (int, bool, error) {
+	// Serialize get-or-create for this prefix so a burst of NetworkConfigurations
+	// sharing one subnet issues a single subnet4-add instead of one per reconcile.
+	lock := s.subnetLock(cfg.Subnet)
+	lock.Lock()
+	defer lock.Unlock()
+
 	// First, try to find an existing subnet
 	subnetID, err := s.GetSubnetID(ctx, cfg.Subnet)
 	if err == nil {
 		return subnetID, false, nil // Subnet exists, not created
 	}
 
-	// If not found, create it
-	if strings.Contains(err.Error(), "no matching Kea subnet") {
-		newID, createErr := s.CreateSubnet(ctx, cfg)
-		if createErr == nil {
-			return newID, true, nil // Subnet created
-		}
-		// HA failover or a concurrent reconcile may have created the subnet
-		// on the other Kea peer between our list and create. Re-resolve by
-		// CIDR instead of bubbling up an error.
-		if strings.Contains(strings.ToLower(createErr.Error()), "already exists") {
-			if existingID, getErr := s.GetSubnetID(ctx, cfg.Subnet); getErr == nil {
-				return existingID, false, nil
-			}
-		}
-		return 0, false, fmt.Errorf("failed to create subnet: %w", createErr)
+	// Only treat "no matching subnet" as a signal to create. Any other error
+	// (e.g. a transport/list failure) is surfaced so we don't create blindly.
+	if !strings.Contains(err.Error(), "no matching Kea subnet") {
+		return 0, false, err
 	}
 
-	// Some other error occurred
-	return 0, false, err
+	// Not found — create it.
+	newID, createErr := s.CreateSubnet(ctx, cfg)
+	if createErr == nil {
+		return newID, true, nil // Subnet created
+	}
+
+	// Create failed. A concurrent writer — another replica (leader election is
+	// optional) or the HA peer — may have created the subnet between our list and
+	// create, or Kea may have rejected our chosen ID. Re-resolve by CIDR before
+	// surfacing the error, rather than depending on the exact wording of Kea's
+	// error message.
+	if existingID, getErr := s.GetSubnetID(ctx, cfg.Subnet); getErr == nil {
+		return existingID, false, nil
+	}
+	return 0, false, fmt.Errorf("failed to create subnet: %w", createErr)
 }
 
 // GetSubnetID lists Kea subnets and returns the id of the subnet matching the given IPv4 CIDR prefix.

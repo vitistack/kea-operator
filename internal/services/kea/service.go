@@ -2,6 +2,7 @@ package kea
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,9 +23,48 @@ const (
 	keaFieldIdentifierType = "identifier-type"
 )
 
+// Kea control API result codes.
+const (
+	keaResultSuccess     = 0
+	keaResultUnsupported = 2
+	keaResultEmpty       = 3 // the command worked but found nothing
+)
+
+// ErrNoLease reports that Kea answered and holds no lease for a MAC (e.g. the
+// machine hasn't booted yet), as opposed to Kea being unreachable.
+var ErrNoLease = errors.New("no lease found")
+
+// ErrSubnetNotFound reports that Kea answered and has no subnet for a prefix.
+var ErrSubnetNotFound = errors.New("no matching Kea subnet")
+
+// PinMode controls whether an existing MAC-only reservation is upgraded to hold
+// the MAC's current lease IP.
+type PinMode string
+
+const (
+	// PinModeOff never upgrades MAC-only reservations (the historical behavior).
+	PinModeOff PinMode = "off"
+	// PinModeLog reports what would be pinned, and conflicts, without writing.
+	PinModeLog PinMode = "log"
+	// PinModeEnforce upgrades MAC-only reservations to hold the lease IP.
+	PinModeEnforce PinMode = "enforce"
+)
+
+// ReservationResult describes what EnsureReservationForMACIP found and did.
+type ReservationResult struct {
+	Created  bool   // a reservation was added for a MAC that had none
+	Upgraded bool   // an existing MAC-only reservation now holds the lease IP
+	Pinned   bool   // the MAC's reservation holds its IP
+	WouldPin bool   // log mode: the reservation would have been upgraded
+	Warning  string // why the lease IP is not pinned, when that needs attention
+}
+
 // Service wraps Kea operations used by the controller.
 type Service struct {
 	Client keainterface.KeaClient
+
+	// PinMode governs upgrading MAC-only reservations; the zero value behaves as PinModeOff.
+	PinMode PinMode
 
 	// subnetLocks serializes GetOrCreateSubnet for the same subnet CIDR within
 	// this process. Multiple NetworkConfigurations that share a NetworkNamespace
@@ -188,7 +228,7 @@ func (s *Service) GetOrCreateSubnet(ctx context.Context, cfg keamodels.SubnetCon
 
 	// Only treat "no matching subnet" as a signal to create. Any other error
 	// (e.g. a transport/list failure) is surfaced so we don't create blindly.
-	if !strings.Contains(err.Error(), "no matching Kea subnet") {
+	if !errors.Is(err, ErrSubnetNotFound) {
 		return 0, false, err
 	}
 
@@ -209,7 +249,9 @@ func (s *Service) GetOrCreateSubnet(ctx context.Context, cfg keamodels.SubnetCon
 	return 0, false, fmt.Errorf("failed to create subnet: %w", createErr)
 }
 
-// GetSubnetID lists Kea subnets and returns the id of the subnet matching the given IPv4 CIDR prefix.
+// GetSubnetID lists Kea subnets and returns the id of the subnet matching the
+// given IPv4 CIDR prefix. It returns an error wrapping ErrSubnetNotFound when
+// Kea has no such subnet.
 func (s *Service) GetSubnetID(ctx context.Context, ipv4Prefix string) (int, error) {
 	req := keamodels.Request{Command: "subnet4-list", Args: map[string]any{}}
 	resp, err := s.Client.Send(ctx, req)
@@ -265,7 +307,7 @@ func (s *Service) GetSubnetID(ctx context.Context, ipv4Prefix string) (int, erro
 			}
 		}
 	}
-	return 0, fmt.Errorf("no matching Kea subnet for prefix %s", ipv4Prefix)
+	return 0, fmt.Errorf("%w for prefix %s", ErrSubnetNotFound, ipv4Prefix)
 }
 
 // SubnetInfo contains details about a Kea subnet
@@ -370,6 +412,7 @@ func (s *Service) GetSubnetInfo(ctx context.Context, subnetID int) (*SubnetInfo,
 }
 
 // DeleteReservationForMAC removes a reservation for the given MAC and subnet.
+// A reservation that is already gone counts as deleted.
 func (s *Service) DeleteReservationForMAC(ctx context.Context, mac string, subnetID int) error {
 	mac = strings.ToLower(strings.TrimSpace(mac))
 	if mac == "" {
@@ -388,27 +431,87 @@ func (s *Service) DeleteReservationForMAC(ctx context.Context, mac string, subne
 	if err != nil {
 		return err
 	}
-	if resp.Result != 0 {
+	if resp.Result != keaResultSuccess && !isEmptyResult(resp) {
 		return fmt.Errorf("kea reservation-del failed: %s", resp.Text)
 	}
 	return nil
 }
 
-// EnsureReservationForMACIP ensures a reservation exists for mac in the given subnet, with optional ip.
-// Returns (created bool, err error) where created=true if a new reservation was added, false if it already existed.
-func (s *Service) EnsureReservationForMACIP(ctx context.Context, mac string, subnetID int, ipv4 string) (bool, error) {
+// EnsureReservationForMACIP ensures a reservation exists for mac in the given
+// subnet. A new reservation holds ipv4 when one is given. An existing MAC-only
+// reservation is upgraded to hold ipv4 according to s.PinMode. A reservation
+// that already holds an IP, or carries settings of its own, is never changed.
+func (s *Service) EnsureReservationForMACIP(ctx context.Context, mac string, subnetID int, ipv4 string) (ReservationResult, error) {
 	mac = strings.ToLower(strings.TrimSpace(mac))
 	if mac == "" {
-		return false, fmt.Errorf("missing mac")
+		return ReservationResult{}, fmt.Errorf("missing mac")
 	}
-	if s.macReservationExists(ctx, mac, subnetID) {
-		return false, nil // already exists, nothing created
+	ip := strings.TrimSpace(ipv4)
+
+	host, found, err := s.getReservation(ctx, mac, subnetID)
+	if err != nil {
+		return ReservationResult{}, err
 	}
+	if !found {
+		if err := s.addReservation(ctx, mac, subnetID, ip); err != nil {
+			return ReservationResult{}, err
+		}
+		return ReservationResult{Created: true, Pinned: ip != ""}, nil
+	}
+
+	reserved := hostIPv4(host)
+	switch {
+	case reserved != "" && (ip == "" || reserved == ip):
+		return ReservationResult{Pinned: true}, nil
+	case reserved != "":
+		return ReservationResult{Warning: fmt.Sprintf("reservation holds %s but the lease is %s; reservation left unchanged", reserved, ip)}, nil
+	case ip == "":
+		return ReservationResult{}, nil // MAC-only and no lease yet: nothing to pin
+	}
+	return s.pinMACOnlyReservation(ctx, mac, subnetID, ip, host)
+}
+
+// pinMACOnlyReservation upgrades mac's MAC-only reservation to hold ip, as
+// allowed by s.PinMode.
+func (s *Service) pinMACOnlyReservation(ctx context.Context, mac string, subnetID int, ip string, host map[string]any) (ReservationResult, error) {
+	if s.PinMode != PinModeLog && s.PinMode != PinModeEnforce {
+		return ReservationResult{}, nil
+	}
+	if !isBareReservation(host) {
+		return ReservationResult{Warning: fmt.Sprintf("reservation has settings of its own; not pinning %s", ip)}, nil
+	}
+	owner, err := s.reservationOwnerOfIP(ctx, subnetID, ip)
+	if err != nil {
+		return ReservationResult{}, err
+	}
+	if owner != "" {
+		return ReservationResult{Warning: fmt.Sprintf("%s is already reserved for %s; not pinned", ip, owner)}, nil
+	}
+	if s.PinMode == PinModeLog {
+		return ReservationResult{WouldPin: true}, nil
+	}
+
+	// Kea allows one reservation per MAC and subnet, so the MAC-only one is
+	// replaced. It carries no settings, so the brief gap changes nothing.
+	if err := s.DeleteReservationForMAC(ctx, mac, subnetID); err != nil {
+		return ReservationResult{}, fmt.Errorf("pinning %s: %w", ip, err)
+	}
+	if addErr := s.addReservation(ctx, mac, subnetID, ip); addErr != nil {
+		if restoreErr := s.addReservation(ctx, mac, subnetID, ""); restoreErr != nil {
+			return ReservationResult{}, fmt.Errorf("pinning %s failed: %w; restoring the MAC-only reservation also failed: %v", ip, addErr, restoreErr)
+		}
+		return ReservationResult{}, fmt.Errorf("pinning %s failed, MAC-only reservation restored: %w", ip, addErr)
+	}
+	return ReservationResult{Upgraded: true, Pinned: true}, nil
+}
+
+// addReservation adds a reservation for mac in subnetID, holding ip if given.
+func (s *Service) addReservation(ctx context.Context, mac string, subnetID int, ip string) error {
 	reservation := map[string]any{
 		keaFieldSubnetID:  subnetID,
 		keaFieldHWAddress: mac,
 	}
-	if ip := strings.TrimSpace(ipv4); ip != "" {
+	if ip != "" {
 		reservation[keaFieldIPAddress] = ip
 	}
 	addReq := keamodels.Request{
@@ -418,86 +521,156 @@ func (s *Service) EnsureReservationForMACIP(ctx context.Context, mac string, sub
 			"operation-target": "all",
 		},
 	}
-	addResp, addErr := s.Client.Send(ctx, addReq)
-	if addErr != nil {
-		return false, addErr
+	resp, err := s.Client.Send(ctx, addReq)
+	if err != nil {
+		return err
 	}
-	if addResp.Result != 0 {
-		return false, fmt.Errorf("kea reservation-add failed: %s", addResp.Text)
+	if resp.Result != keaResultSuccess {
+		return fmt.Errorf("kea reservation-add failed: %s", resp.Text)
 	}
-	return true, nil // new reservation created
+	return nil
 }
 
-// macReservationExists checks whether a reservation already exists for the given MAC + subnet.
-func (s *Service) macReservationExists(ctx context.Context, mac string, subnetID int) bool {
-	mac = strings.ToLower(strings.TrimSpace(mac))
-	if mac == "" {
-		return false
-	}
-
-	// 1. Primary: reservation-get-by-id (identifier-type + identifier) => hosts list
-	primary := keamodels.Request{
+// getReservation returns mac's reservation in subnetID. found is false when
+// Kea has none; an error means Kea couldn't be asked, so callers must not write.
+func (s *Service) getReservation(ctx context.Context, mac string, subnetID int) (host map[string]any, found bool, err error) {
+	byID := keamodels.Request{
 		Command: "reservation-get-by-id",
 		Args: map[string]any{
 			keaFieldIdentifierType: keaFieldHWAddress,
 			keaFieldIdentifier:     mac,
 		},
 	}
-	if resp, err := s.Client.Send(ctx, primary); err == nil {
-		if resp.Result == 0 { // success path returns hosts array
-			if hosts, ok := resp.Arguments["hosts"].([]any); ok {
-				for _, h := range hosts {
-					hm, ok := h.(map[string]any)
-					if !ok {
-						continue
-					}
-					if hw, ok2 := hm[keaFieldHWAddress].(string); ok2 && strings.EqualFold(hw, mac) {
-						if sid, ok3 := hm[keaFieldSubnetID]; ok3 {
-							switch v := sid.(type) {
-							case float64:
-								if int(v) != subnetID {
-									continue
-								}
-							case int:
-								if v != subnetID {
-									continue
-								}
-							}
-						}
-						return true
-					}
-				}
-			}
-			return false
+	if resp, sendErr := s.Client.Send(ctx, byID); sendErr == nil {
+		if resp.Result == keaResultSuccess {
+			host, found = findHost(resp.Arguments, mac, subnetID)
+			return host, found, nil
 		}
-		txt := strings.ToLower(resp.Text)
-		if strings.Contains(txt, "not found") || strings.Contains(txt, "no host") || strings.Contains(txt, "0 ipv4 host") {
-			return false
+		if isEmptyResult(resp) {
+			return nil, false, nil
 		}
 	}
 
-	// 2. Fallback: reservation-get-all (scan hosts list for match)
-	fallback := keamodels.Request{Command: "reservation-get-all", Args: map[string]any{keaFieldSubnetID: subnetID}}
-	resp2, err2 := s.Client.Send(ctx, fallback)
-	if err2 != nil || resp2.Result != 0 {
-		return false
+	// Fallback (older Kea, or the first lookup failed): scan the subnet.
+	all := keamodels.Request{Command: "reservation-get-all", Args: map[string]any{keaFieldSubnetID: subnetID}}
+	resp, sendErr := s.Client.Send(ctx, all)
+	if sendErr != nil {
+		return nil, false, fmt.Errorf("reading reservations for %s: %w", mac, sendErr)
 	}
-	if hosts, ok := resp2.Arguments["hosts"].([]any); ok {
-		for _, h := range hosts {
-			hm, ok := h.(map[string]any)
-			if !ok {
+	if isEmptyResult(resp) {
+		return nil, false, nil
+	}
+	if resp.Result != keaResultSuccess {
+		return nil, false, fmt.Errorf("kea reservation-get-all failed: %s", resp.Text)
+	}
+	host, found = findHost(resp.Arguments, mac, subnetID)
+	return host, found, nil
+}
+
+// findHost returns the host for mac in subnetID from a host_cmds "hosts" list.
+func findHost(args map[string]any, mac string, subnetID int) (map[string]any, bool) {
+	hosts, _ := args["hosts"].([]any)
+	for _, h := range hosts {
+		hm, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if hw, ok := hm[keaFieldHWAddress].(string); !ok || !strings.EqualFold(hw, mac) {
+			continue
+		}
+		switch v := hm[keaFieldSubnetID].(type) {
+		case float64:
+			if int(v) != subnetID {
 				continue
 			}
-			if hw, ok2 := hm[keaFieldHWAddress].(string); ok2 && strings.EqualFold(hw, mac) {
-				return true
+		case int:
+			if v != subnetID {
+				continue
 			}
 		}
+		return hm, true
+	}
+	return nil, false
+}
+
+// reservationOwnerOfIP returns who holds a reservation for ip in subnetID, or
+// "" when the address isn't reserved.
+func (s *Service) reservationOwnerOfIP(ctx context.Context, subnetID int, ip string) (string, error) {
+	req := keamodels.Request{
+		Command: "reservation-get",
+		Args: map[string]any{
+			keaFieldSubnetID:  subnetID,
+			keaFieldIPAddress: ip,
+		},
+	}
+	resp, err := s.Client.Send(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("checking reservations for %s: %w", ip, err)
+	}
+	if isEmptyResult(resp) {
+		return "", nil
+	}
+	if resp.Result != keaResultSuccess {
+		return "", fmt.Errorf("kea reservation-get failed: %s", resp.Text)
+	}
+	if hw, ok := resp.Arguments[keaFieldHWAddress].(string); ok && hw != "" {
+		return strings.ToLower(hw), nil
+	}
+	return "another client", nil
+}
+
+// hostIPv4 returns the address a reservation holds, or "" for a MAC-only one.
+func hostIPv4(host map[string]any) string {
+	ip, _ := host[keaFieldIPAddress].(string)
+	ip = strings.TrimSpace(ip)
+	if ip == "0.0.0.0" {
+		return ""
+	}
+	return ip
+}
+
+// isBareReservation reports whether a reservation carries nothing but its MAC
+// and subnet — the shape this operator creates. Kea also lists default-valued
+// fields (empty hostname, 0.0.0.0 next-server, ...), which don't count.
+func isBareReservation(host map[string]any) bool {
+	for k, v := range host {
+		if k == keaFieldHWAddress || k == keaFieldSubnetID {
+			continue
+		}
+		if !isEmptyValue(v) {
+			return false
+		}
+	}
+	return true
+}
+
+func isEmptyValue(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case string:
+		return x == "" || x == "0.0.0.0"
+	case []any:
+		return len(x) == 0
+	case map[string]any:
+		return len(x) == 0
 	}
 	return false
 }
 
-// GetLeaseIPv4ForMAC tries to resolve an IPv4 lease for the given MAC.
-// Returns ip, subnet-id (if available), error
+// isEmptyResult reports whether Kea answered "nothing found": result 3, or the
+// not-found wording older versions used with other result codes.
+func isEmptyResult(resp keamodels.Response) bool {
+	if resp.Result == keaResultEmpty {
+		return true
+	}
+	txt := strings.ToLower(resp.Text)
+	return strings.Contains(txt, "not found") || strings.Contains(txt, "no host") || strings.Contains(txt, "0 ipv4 host")
+}
+
+// GetLeaseIPv4ForMAC resolves the IPv4 lease for the given MAC.
+// Returns ip, subnet-id (if available), error. The error wraps ErrNoLease when
+// Kea answered but holds no lease; any other error means Kea couldn't be asked.
 func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, int, error) {
 	mac = strings.ToLower(strings.TrimSpace(mac))
 	if mac == "" {
@@ -507,68 +680,19 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 		Command: "lease4-get-by-hw-address",
 		Args:    map[string]any{keaFieldHWAddress: mac},
 	}
-	if resp, err := s.Client.Send(ctx, primary); err == nil {
-		if resp.Result == 0 {
-			// Kea can return leases as an array; pick the newest (largest cltt) that matches the MAC.
-			if arr, ok := resp.Arguments["leases"].([]any); ok {
-				bestIP := ""
-				bestSID := 0
-				var bestCLTT float64
-				for _, elem := range arr {
-					m, ok := elem.(map[string]any)
-					if !ok {
-						continue
-					}
-					hw, _ := m[keaFieldHWAddress].(string)
-					if !strings.EqualFold(strings.TrimSpace(hw), mac) {
-						// Be defensive in case server returns extra entries
-						continue
-					}
-					ip, _ := m[keaFieldIPAddress].(string)
-					if ip == "" {
-						continue
-					}
-					// Prefer the highest cltt (most recent)
-					cltt := 0.0
-					switch v := m["cltt"].(type) {
-					case float64:
-						cltt = v
-					case int:
-						cltt = float64(v)
-					}
-					sid := 0
-					switch v := m[keaFieldSubnetID].(type) {
-					case float64:
-						sid = int(v)
-					case int:
-						sid = v
-					}
-					if bestIP == "" || cltt > bestCLTT {
-						bestIP = ip
-						bestSID = sid
-						bestCLTT = cltt
-					}
-				}
-				if bestIP != "" {
-					return bestIP, bestSID, nil
-				}
-			} else if l, ok := resp.Arguments["leases"].(map[string]any); ok {
-				// Some deployments might return a single lease object; keep legacy support.
-				ip := ""
-				if v, ok2 := l[keaFieldIPAddress].(string); ok2 {
-					ip = v
-				}
-				sid := 0
-				if v, ok2 := l[keaFieldSubnetID].(float64); ok2 {
-					sid = int(v)
-				} else if v2, ok3 := l[keaFieldSubnetID].(int); ok3 {
-					sid = v2
-				}
-				if ip != "" {
-					return ip, sid, nil
-				}
-			}
+	resp, err := s.Client.Send(ctx, primary)
+	if err != nil {
+		return "", 0, fmt.Errorf("lease lookup for %s: %w", mac, err)
+	}
+	switch {
+	case resp.Result == keaResultSuccess:
+		if ip, sid := newestLease(resp.Arguments, mac); ip != "" {
+			return ip, sid, nil
 		}
+	case resp.Result == keaResultUnsupported, isEmptyResult(resp):
+		// No lease, or lease commands unavailable: try the reservation below.
+	default:
+		return "", 0, fmt.Errorf("kea lease4-get-by-hw-address failed: %s", resp.Text)
 	}
 
 	// Fallback: reservation-get-by-id for any stored address
@@ -579,7 +703,11 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 			keaFieldIdentifier:     mac,
 		},
 	}
-	if resp, err := s.Client.Send(ctx, fb); err == nil && resp.Result == 0 {
+	resp, err = s.Client.Send(ctx, fb)
+	if err != nil {
+		return "", 0, fmt.Errorf("reservation lookup for %s: %w", mac, err)
+	}
+	if resp.Result == keaResultSuccess {
 		if hosts, ok := resp.Arguments["hosts"].([]any); ok {
 			for _, h := range hosts {
 				hm, ok := h.(map[string]any)
@@ -598,7 +726,66 @@ func (s *Service) GetLeaseIPv4ForMAC(ctx context.Context, mac string) (string, i
 			}
 		}
 	}
-	// Not finding a lease is not necessarily an error - the machine might not have booted yet
-	// or the lease may have expired. Return empty values to let caller decide how to handle.
-	return "", 0, fmt.Errorf("no lease found for MAC %s", mac)
+	// Not finding a lease is not necessarily a problem - the machine might not
+	// have booted yet or the lease may have expired. Callers check ErrNoLease.
+	return "", 0, fmt.Errorf("%w for MAC %s", ErrNoLease, mac)
+}
+
+// newestLease picks the most recent (largest cltt) lease for mac from a
+// lease4-get-by-hw-address answer. Returns "" when there is none.
+func newestLease(args map[string]any, mac string) (string, int) {
+	// Kea can return leases as an array; pick the newest (largest cltt) that matches the MAC.
+	if arr, ok := args["leases"].([]any); ok {
+		bestIP := ""
+		bestSID := 0
+		var bestCLTT float64
+		for _, elem := range arr {
+			m, ok := elem.(map[string]any)
+			if !ok {
+				continue
+			}
+			hw, _ := m[keaFieldHWAddress].(string)
+			if !strings.EqualFold(strings.TrimSpace(hw), mac) {
+				// Be defensive in case server returns extra entries
+				continue
+			}
+			ip, _ := m[keaFieldIPAddress].(string)
+			if ip == "" {
+				continue
+			}
+			// Prefer the highest cltt (most recent)
+			cltt := 0.0
+			switch v := m["cltt"].(type) {
+			case float64:
+				cltt = v
+			case int:
+				cltt = float64(v)
+			}
+			sid := 0
+			switch v := m[keaFieldSubnetID].(type) {
+			case float64:
+				sid = int(v)
+			case int:
+				sid = v
+			}
+			if bestIP == "" || cltt > bestCLTT {
+				bestIP = ip
+				bestSID = sid
+				bestCLTT = cltt
+			}
+		}
+		return bestIP, bestSID
+	}
+	if l, ok := args["leases"].(map[string]any); ok {
+		// Some deployments might return a single lease object; keep legacy support.
+		ip, _ := l[keaFieldIPAddress].(string)
+		sid := 0
+		if v, ok2 := l[keaFieldSubnetID].(float64); ok2 {
+			sid = int(v)
+		} else if v2, ok3 := l[keaFieldSubnetID].(int); ok3 {
+			sid = v2
+		}
+		return ip, sid
+	}
+	return "", 0
 }

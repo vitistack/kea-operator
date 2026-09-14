@@ -9,20 +9,21 @@ const (
 	LOG_DISABLE_STACKTRANCE = "LOG_DISABLE_STACKTRANCE"
 	LOG_UNESCAPE_MULTILINE  = "LOG_UNESCAPE_MULTILINE"
 
-	KEA_BASE_URL             = "KEA_BASE_URL"
-	KEA_URL                  = "KEA_URL"           // full URL e.g. https://host:port (preferred)
-	KEA_SECONDARY_URL        = "KEA_SECONDARY_URL" // secondary URL for HA failover (optional)
-	KEA_PORT                 = "KEA_PORT"
-	KEA_TLS_CA_FILE          = "KEA_TLS_CA_FILE"
-	KEA_TLS_CERT_FILE        = "KEA_TLS_CERT_FILE"
-	KEA_TLS_KEY_FILE         = "KEA_TLS_KEY_FILE"
-	KEA_TLS_ENABLED          = "KEA_TLS_ENABLED" // boolean toggle; default false
-	KEA_TLS_INSECURE         = "KEA_TLS_INSECURE"
-	KEA_TLS_SERVER_NAME      = "KEA_TLS_SERVER_NAME"
-	KEA_TIMEOUT_SECONDS      = "KEA_TIMEOUT_SECONDS"
-	KEA_TLS_SECRET_NAME      = "KEA_TLS_SECRET_NAME"      // #nosec G101
-	KEA_TLS_SECRET_NAMESPACE = "KEA_TLS_SECRET_NAMESPACE" // #nosec G101
-	KEA_DISABLE_KEEPALIVES   = "KEA_DISABLE_KEEPALIVES"   // boolean; disable HTTP keep-alive reuse
+	KEA_BASE_URL                = "KEA_BASE_URL"
+	KEA_URL                     = "KEA_URL"           // full URL e.g. https://host:port (preferred)
+	KEA_SECONDARY_URL           = "KEA_SECONDARY_URL" // secondary URL for HA failover (optional)
+	KEA_PORT                    = "KEA_PORT"
+	KEA_TLS_CA_FILE             = "KEA_TLS_CA_FILE"
+	KEA_TLS_CERT_FILE           = "KEA_TLS_CERT_FILE"
+	KEA_TLS_KEY_FILE            = "KEA_TLS_KEY_FILE"
+	KEA_TLS_ENABLED             = "KEA_TLS_ENABLED" // boolean toggle; default false
+	KEA_TLS_INSECURE            = "KEA_TLS_INSECURE"
+	KEA_TLS_SERVER_NAME         = "KEA_TLS_SERVER_NAME"
+	KEA_TIMEOUT_SECONDS         = "KEA_TIMEOUT_SECONDS"         // whole-request timeout; default 60
+	KEA_CONNECT_TIMEOUT_SECONDS = "KEA_CONNECT_TIMEOUT_SECONDS" // TCP connect + TLS handshake timeout; default 10
+	KEA_TLS_SECRET_NAME         = "KEA_TLS_SECRET_NAME"         // #nosec G101
+	KEA_TLS_SECRET_NAMESPACE    = "KEA_TLS_SECRET_NAMESPACE"    // #nosec G101
+	KEA_DISABLE_KEEPALIVES      = "KEA_DISABLE_KEEPALIVES"      // boolean; disable HTTP keep-alive reuse
 	// Basic auth credentials (optional) – if set and no client certs provided, basic auth will be used
 	KEA_BASIC_AUTH_USERNAME = "KEA_BASIC_AUTH_USERNAME"
 	KEA_BASIC_AUTH_PASSWORD = "KEA_BASIC_AUTH_PASSWORD" // #nosec G101 false positive – variable name only
@@ -36,6 +37,15 @@ const (
 	// unset values as the DHCP default for backward compatibility and logs a
 	// deprecation notice once per resource.
 	KEA_STRICT_DEFAULTS = "KEA_STRICT_DEFAULTS"
+
+	// KEA_PIN_RESERVATIONS controls upgrading a MAC-only reservation to hold
+	// the MAC's current lease IP: "off", "log" (default; report what would be
+	// pinned, write nothing) or "enforce".
+	KEA_PIN_RESERVATIONS = "KEA_PIN_RESERVATIONS"
+
+	// KEA_CLEANUP_TIMEOUT is how long deletion retries a failed Kea reservation
+	// cleanup before removing the finalizer anyway (Go duration; default 15m).
+	KEA_CLEANUP_TIMEOUT = "KEA_CLEANUP_TIMEOUT"
 
 	// MAX_CONCURRENT_RECONCILES is the maximum number of reconciliations run in
 	// parallel per controller. The workqueue still serializes by object key, so

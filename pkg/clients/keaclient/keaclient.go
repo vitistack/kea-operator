@@ -22,6 +22,12 @@ import (
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 )
 
+// errUnrecognizedResponse is returned when a Kea answer isn't a command response.
+var errUnrecognizedResponse = errors.New("unrecognized Kea response format")
+
+// keaClient talks to the Kea control API. One instance is shared by every
+// concurrent reconcile, so after construction its fields are read-only: Send
+// must never modify them.
 type keaClient struct {
 	Context      context.Context
 	BaseUrl      string
@@ -29,9 +35,7 @@ type keaClient struct {
 	Port         string
 	HttpClient   *http.Client
 
-	lastConfigHash    string // simple hash to avoid rebuilding transport when unchanged
 	disableKeepAlives bool
-	currentUrl        string // Tracks which URL is currently active
 
 	// TLS options
 	CACertPath         string
@@ -50,7 +54,11 @@ type keaClient struct {
 	ClientCertPEM []byte
 	ClientKeyPEM  []byte
 
+	// Timeout bounds a whole request, including Kea's time to answer.
 	Timeout time.Duration
+	// ConnectTimeout bounds only TCP connect and TLS handshake, so an
+	// unreachable server fails over quickly even with a long Timeout.
+	ConnectTimeout time.Duration
 }
 
 func NewKeaClient(baseUrl, port string) *keaClient {
@@ -87,18 +95,18 @@ func (kc *keaClient) applyOptions(options ...KeaOption) {
 
 func (kc *keaClient) applyDefaults() {
 	kc.Context = context.Background()
-	// 30s gives the Kea Control Agent — which serializes commands — room to
-	// answer under load before we trip a timeout and force a failover.
-	// Override via KEA_TIMEOUT_SECONDS.
-	kc.Timeout = 30 * time.Second
-	// Default plain client; may be overridden by buildHTTPClient()
+	// 60s gives Kea — which serializes commands — room to answer under load
+	// before we trip a timeout and force a failover. Override via
+	// KEA_TIMEOUT_SECONDS.
+	kc.Timeout = 60 * time.Second
+	// Connecting is fast when the server is up; don't wait the full request
+	// timeout before failing over. Override via KEA_CONNECT_TIMEOUT_SECONDS.
+	kc.ConnectTimeout = 10 * time.Second
+	// Default plain client; replaced by buildHTTPClient()
 	kc.HttpClient = &http.Client{Timeout: kc.Timeout}
 }
 
 func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.Response, error) {
-	// Ensure HTTP client is built (lazy) if config changed
-	c.buildHTTPClient()
-
 	// Marshal the request exactly as provided (no double-encoding of command field)
 	body, err := json.Marshal(cmd)
 	if err != nil {
@@ -106,21 +114,16 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 	}
 
 	// Try primary URL first, then secondary if available
-	urls := []string{c.BaseUrl}
+	servers := []string{c.BaseUrl}
 	if c.SecondaryUrl != "" {
-		urls = append(urls, c.SecondaryUrl)
+		servers = append(servers, c.SecondaryUrl)
 	}
 
 	var lastErr error
-	for i, baseUrl := range urls {
-		// Temporarily set BaseUrl for buildBaseURL
-		originalBase := c.BaseUrl
-		c.BaseUrl = baseUrl
-		base, err := c.buildBaseURL()
-		c.BaseUrl = originalBase // Restore original
-
+	for i, server := range servers {
+		base, err := c.buildURL(server)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to build URL for %s: %w", baseUrl, err)
+			lastErr = fmt.Errorf("failed to build URL for %s: %w", server, err)
 			continue
 		}
 
@@ -134,23 +137,20 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 			req.SetBasicAuth(c.BasicAuthUsername, c.BasicAuthPassword)
 		}
 
-		// #nosec G704 -- URL is validated via buildBaseURL() using url.Parse
+		// #nosec G704 -- URL is validated via buildURL() using url.Parse
 		resp, err := c.HttpClient.Do(req)
 		if err != nil {
-			if i == 0 && len(urls) > 1 {
-				vlog.Warnf("Primary KEA server failed, trying secondary. primary=%s error=%v", baseUrl, err)
+			if i == 0 && len(servers) > 1 {
+				vlog.Warnf("Primary KEA server failed, trying secondary. primary=%s error=%v", server, err)
 			}
 			lastErr = fmt.Errorf("request failed for %s: %w", base, err)
 			continue
 		}
 
-		defer func() {
-			if cerr := resp.Body.Close(); cerr != nil {
-				vlog.Errorf("failed to close response body: %v", cerr)
-			}
-		}()
-
 		data, err := io.ReadAll(resp.Body)
+		if cerr := resp.Body.Close(); cerr != nil {
+			vlog.Errorf("failed to close response body: %v", cerr)
+		}
 		if err != nil {
 			lastErr = fmt.Errorf("failed to read response from %s: %w", base, err)
 			continue
@@ -158,11 +158,16 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 
 		// Log successful failover if we're using secondary
 		if i > 0 {
-			vlog.Infof("Successfully failed over to secondary KEA server: url=%s", baseUrl)
+			vlog.Infof("Successfully failed over to secondary KEA server: url=%s", server)
 		}
-		c.currentUrl = baseUrl
 
-		// Parse response (existing logic)
+		// Kea returns command outcomes, failures included, in the body of an
+		// HTTP 200. Any other status comes from auth, a proxy or a broken
+		// server, so its body must not be read as a command result.
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return keamodels.Response{}, fmt.Errorf("kea server %s returned HTTP %d: %s", base, resp.StatusCode, snippet(data))
+		}
+
 		return c.parseResponse(data)
 	}
 
@@ -170,75 +175,71 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 	return keamodels.Response{}, fmt.Errorf("all KEA servers failed: %w", lastErr)
 }
 
-// parseResponse handles the response parsing logic extracted from Send
+// parseResponse decodes a Kea command response. Kea answers with an array
+// (Control Agent), a single object (DHCP daemon HTTP socket) or an object
+// wrapping a "responses" array; the first response is used. A body without a
+// "result" field is rejected rather than read as success.
 func (c *keaClient) parseResponse(data []byte) (keamodels.Response, error) {
-
-	// 1. Try plain array response: [ { result, text, ... } ]
-	var arr []keamodels.Response
-	if err := json.Unmarshal(data, &arr); err == nil && len(arr) > 0 {
-		return arr[0], nil
+	elem, err := firstResponseElement(data)
+	if err != nil {
+		logUnexpectedPayload(data)
+		return keamodels.Response{}, err
 	}
-	// 1b. Lax parse allowing non-object arguments (e.g., list-commands returns arguments as array)
-	type laxResponse struct {
-		Result    int             `json:"result"`
+
+	var raw struct {
+		Result    *int            `json:"result"`
 		Text      string          `json:"text"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
-	var arrLax []laxResponse
-	if err := json.Unmarshal(data, &arrLax); err == nil && len(arrLax) > 0 {
-		resp := keamodels.Response{Result: arrLax[0].Result, Text: arrLax[0].Text}
-		// Try to unmarshal Arguments as map[string]any
-		if len(arrLax[0].Arguments) > 0 {
-			var args map[string]any
-			if err := json.Unmarshal(arrLax[0].Arguments, &args); err == nil {
-				resp.Arguments = args
-			}
-		}
-		return resp, nil
-	}
-	// 2. Try wrapped object: { "responses": [ ... ] }
-	var wrapped struct {
-		Responses []keamodels.Response `json:"responses"`
-	}
-	if err := json.Unmarshal(data, &wrapped); err == nil && len(wrapped.Responses) > 0 {
-		return wrapped.Responses[0], nil
-	}
-	// 2b. Lax wrapped parse
-	var wrappedLax struct {
-		Responses []laxResponse `json:"responses"`
-	}
-	if err := json.Unmarshal(data, &wrappedLax); err == nil && len(wrappedLax.Responses) > 0 {
-		lr := wrappedLax.Responses[0]
-		resp := keamodels.Response{Result: lr.Result, Text: lr.Text}
-		// Try to unmarshal Arguments as map[string]any
-		if len(lr.Arguments) > 0 {
-			var args map[string]any
-			if err := json.Unmarshal(lr.Arguments, &args); err == nil {
-				resp.Arguments = args
-			}
-		}
-		return resp, nil
-	}
-	// 3. Try single object (treat as valid even if text is empty and result == 0)
-	var single keamodels.Response
-	if err := json.Unmarshal(data, &single); err == nil {
-		return single, nil
-	}
-	// 3b. Lax single object
-	var singleLax laxResponse
-	if err := json.Unmarshal(data, &singleLax); err == nil {
-		resp := keamodels.Response{Result: singleLax.Result, Text: singleLax.Text}
-		// Try to unmarshal Arguments as map[string]any
-		if len(singleLax.Arguments) > 0 {
-			var args map[string]any
-			if err := json.Unmarshal(singleLax.Arguments, &args); err == nil {
-				resp.Arguments = args
-			}
-		}
-		return resp, nil
+	if err := json.Unmarshal(elem, &raw); err != nil || raw.Result == nil {
+		logUnexpectedPayload(data)
+		return keamodels.Response{}, errUnrecognizedResponse
 	}
 
-	// Pretty-print JSON body when possible to aid debugging
+	resp := keamodels.Response{Result: *raw.Result, Text: raw.Text}
+	// Arguments that aren't an object (e.g. list-commands returns an array) are left nil.
+	if len(raw.Arguments) > 0 {
+		var args map[string]any
+		if err := json.Unmarshal(raw.Arguments, &args); err == nil {
+			resp.Arguments = args
+		}
+	}
+	return resp, nil
+}
+
+// firstResponseElement returns the raw JSON of the first response in a Kea answer.
+func firstResponseElement(data []byte) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil, errUnrecognizedResponse
+	}
+	switch trimmed[0] {
+	case '[':
+		var arr []json.RawMessage
+		if err := json.Unmarshal(trimmed, &arr); err != nil || len(arr) == 0 {
+			return nil, errUnrecognizedResponse
+		}
+		return arr[0], nil
+	case '{':
+		var wrapped struct {
+			Responses *[]json.RawMessage `json:"responses"`
+		}
+		if err := json.Unmarshal(trimmed, &wrapped); err != nil {
+			return nil, errUnrecognizedResponse
+		}
+		if wrapped.Responses == nil {
+			return trimmed, nil
+		}
+		if len(*wrapped.Responses) == 0 {
+			return nil, errUnrecognizedResponse
+		}
+		return (*wrapped.Responses)[0], nil
+	}
+	return nil, errUnrecognizedResponse
+}
+
+// logUnexpectedPayload pretty-prints a JSON body when possible to aid debugging.
+func logUnexpectedPayload(data []byte) {
 	pretty := string(data)
 	if len(data) > 0 {
 		var buf bytes.Buffer
@@ -247,12 +248,22 @@ func (c *keaClient) parseResponse(data []byte) (keamodels.Response, error) {
 		}
 	}
 	vlog.Warn("unexpected Kea response payload", " body", pretty)
-	return keamodels.Response{}, errors.New("unrecognized Kea response format")
 }
 
-// buildBaseURL constructs a full base URL including scheme and port if needed.
-func (c *keaClient) buildBaseURL() (string, error) {
-	s := c.BaseUrl
+// snippet returns the start of a response body for error messages.
+func snippet(data []byte) string {
+	const maxLen = 200
+	s := strings.TrimSpace(string(data))
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
+}
+
+// buildURL constructs a full base URL for server (the primary or secondary
+// URL), including scheme and port if needed.
+func (c *keaClient) buildURL(server string) (string, error) {
+	s := server
 	if s == "" {
 		return "", errors.New("base URL is empty")
 	}
@@ -280,35 +291,28 @@ func (c *keaClient) buildBaseURL() (string, error) {
 	return u.String(), nil
 }
 
-// buildHTTPClient builds the HTTP client with TLS settings, if any are provided.
+// buildHTTPClient builds the HTTP client, with TLS settings if any are
+// provided. It runs once at construction; Send never rebuilds the client.
 func (c *keaClient) buildHTTPClient() {
-	// If already has a transport with TLS or no TLS requested, keep existing unless timeout changed
-	// Always ensure timeout is applied
 	if c.HttpClient == nil {
 		c.HttpClient = &http.Client{}
 	}
+	c.HttpClient.Timeout = c.Timeout
 
-	// Compute a lightweight config fingerprint
-	confParts := []string{
-		c.BaseUrl, c.Port,
-		c.CACertPath, c.ClientCertPath, c.ClientKeyPath,
-		c.ServerName,
-		boolToStr(c.InsecureSkipVerify),
-		hashBytes(c.CACertPEM), hashBytes(c.ClientCertPEM), hashBytes(c.ClientKeyPEM),
-	}
-	newHash := strings.Join(confParts, "|")
-	if c.lastConfigHash == newHash && c.HttpClient.Transport != nil {
-		// Only update timeout
-		c.HttpClient.Timeout = c.Timeout
-		return
-	}
+	dialer := &net.Dialer{Timeout: c.ConnectTimeout, KeepAlive: 30 * time.Second}
 
 	tlsNeeded := c.CACertPath != "" || len(c.CACertPEM) > 0 ||
 		((c.ClientCertPath != "" && c.ClientKeyPath != "") || (len(c.ClientCertPEM) > 0 && len(c.ClientKeyPEM) > 0)) ||
 		c.InsecureSkipVerify ||
 		c.ServerName != ""
 	if !tlsNeeded {
-		c.HttpClient.Timeout = c.Timeout
+		// Same behavior as http.DefaultTransport, plus the connect timeout.
+		transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = dt.Clone()
+		}
+		transport.DialContext = dialer.DialContext
+		c.HttpClient.Transport = transport
 		return
 	}
 
@@ -345,29 +349,12 @@ func (c *keaClient) buildHTTPClient() {
 			tlsCfg.Certificates = []tls.Certificate{*cert}
 		}
 	}
-	transport := &http.Transport{TLSClientConfig: tlsCfg, DisableKeepAlives: c.disableKeepAlives}
-	c.HttpClient.Transport = transport
-	c.lastConfigHash = newHash
-	c.HttpClient.Timeout = c.Timeout
-}
-
-func boolToStr(b bool) string {
-	if b {
-		return "1"
+	c.HttpClient.Transport = &http.Transport{
+		TLSClientConfig:     tlsCfg,
+		DisableKeepAlives:   c.disableKeepAlives,
+		DialContext:         dialer.DialContext,
+		TLSHandshakeTimeout: c.ConnectTimeout,
 	}
-	return "0"
-}
-
-// hashBytes returns a short stable string for a byte slice:
-// length plus first/last 4 bytes (hex) to avoid heavy hashing libraries.
-func hashBytes(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	if len(b) < 8 {
-		return fmt.Sprintf("%d:%x", len(b), b)
-	}
-	return fmt.Sprintf("%d:%x:%x", len(b), b[:4], b[len(b)-4:])
 }
 
 // loadClientCertWithFallback attempts to load the configured client cert/key first;
@@ -415,7 +402,8 @@ func (c *keaClient) loadClientCertWithFallback() *tls.Certificate {
 //	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
 //	KEA_TLS_INSECURE (true/false)
 //	KEA_TLS_SERVER_NAME
-//	KEA_TIMEOUT_SECONDS (default 10)
+//	KEA_TIMEOUT_SECONDS (default 60)
+//	KEA_CONNECT_TIMEOUT_SECONDS (default 10)
 //
 // Deprecated: use NewKeaClientWithOptions(OptionFromEnv()) directly.
 func NewKeaClientFromEnv() *keaClient {

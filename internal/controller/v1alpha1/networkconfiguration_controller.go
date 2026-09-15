@@ -411,16 +411,18 @@ func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Cont
 	}
 
 	for _, mac := range macs {
-		ip, leaseSubnetID, err := r.Kea.GetLeaseIPv4ForMAC(ctx, mac)
+		// The lease's subnet-id is ignored: Kea keeps it when subnets are
+		// renumbered (they are re-created with new IDs after a Kea restart),
+		// so it can name another network's subnet. subnetID was resolved from
+		// the prefix just now and is the one to reserve in.
+		ip, _, err := r.Kea.GetLeaseIPv4ForMAC(ctx, mac)
 		if err != nil && !errors.Is(err, keaservice.ErrNoLease) {
 			errs = append(errs, fmt.Sprintf("%s: %v", mac, err))
 			outcomes[mac] = lastKnownOutcome(previous[mac], "")
 			continue
 		}
 
-		// The lease decides the subnet only when its IP belongs to this
-		// network; a stale lease from elsewhere must not.
-		sid := subnetID
+		// A stale lease from another network must not be pinned here.
 		if ip != "" && ipnet != nil {
 			if p := net.ParseIP(ip); p == nil || p.To4() == nil || !ipnet.Contains(p) {
 				log.Info("lease IP not within expected prefix, will create MAC-only reservation",
@@ -428,11 +430,8 @@ func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Cont
 				ip = ""
 			}
 		}
-		if ip != "" && leaseSubnetID > 0 {
-			sid = leaseSubnetID
-		}
 
-		res, err := r.Kea.EnsureReservationForMACIP(ctx, mac, sid, ip)
+		res, err := r.Kea.EnsureReservationForMACIP(ctx, mac, subnetID, ip)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", mac, err))
 			outcomes[mac] = lastKnownOutcome(previous[mac], ip)
@@ -440,9 +439,9 @@ func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Cont
 		}
 		if res.Warning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", mac, res.Warning))
-			log.Info("DHCP reservation not pinned", "mac", mac, "leaseIP", ip, "subnetID", sid, "reason", res.Warning)
+			log.Info("DHCP reservation not pinned", "mac", mac, "leaseIP", ip, "subnetID", subnetID, "reason", res.Warning)
 		}
-		logReservationResult(log, mac, ip, sid, ipv4Prefix, res)
+		logReservationResult(log, mac, ip, subnetID, ipv4Prefix, res)
 		outcomes[mac] = macOutcome{ip: ip, reserved: res.Pinned}
 	}
 

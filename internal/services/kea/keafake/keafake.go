@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -214,6 +215,9 @@ func (s *Server) addReservation(cmd keamodels.Request) keamodels.Response {
 	if ip != "" && s.RejectIPAdd != "" {
 		return keamodels.Response{Result: 1, Text: s.RejectIPAdd}
 	}
+	if resp, rejected := s.rejectIPOutsideSubnet(sid, ip); rejected {
+		return resp
+	}
 	for _, h := range s.Hosts {
 		if argInt(h[fieldSubnetID]) != sid {
 			continue
@@ -227,6 +231,24 @@ func (s *Server) addReservation(cmd keamodels.Request) keamodels.Response {
 	}
 	s.Hosts = append(s.Hosts, Host(mac, sid, ip))
 	return ok("Host added.", nil)
+}
+
+// rejectIPOutsideSubnet answers like Kea when ip is not inside the CIDR of
+// subnet sid. Subnets the fake doesn't know are not checked.
+func (s *Server) rejectIPOutsideSubnet(sid int, ip string) (keamodels.Response, bool) {
+	if ip == "" {
+		return keamodels.Response{}, false
+	}
+	for _, sn := range s.Subnets {
+		if sn.ID != sid {
+			continue
+		}
+		if _, ipnet, err := net.ParseCIDR(sn.CIDR); err == nil && !ipnet.Contains(net.ParseIP(ip)) {
+			return keamodels.Response{Result: 1, Text: fmt.Sprintf("specified reservation '%s' is not matching the IPv4 subnet prefix '%s'", ip, sn.CIDR)}, true
+		}
+		break
+	}
+	return keamodels.Response{}, false
 }
 
 func subnetJSON(sn Subnet) map[string]any {

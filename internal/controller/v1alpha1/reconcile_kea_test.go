@@ -219,6 +219,30 @@ func TestReconcile_LeaseInOtherSubnet_ReservesInResolvedSubnet(t *testing.T) {
 	}
 }
 
+// Kea keeps a lease's subnet-id when its subnets are renumbered, so a lease
+// whose IP is inside the prefix can name another network's subnet. The prefix
+// decides the subnet; the lease's subnet-id must not.
+func TestReconcile_LeaseWithStaleSubnetID_ReservesInResolvedSubnet(t *testing.T) {
+	const renumberedSubnetID = 28
+	kea := rtKea()
+	kea.Subnets = append(kea.Subnets, keafake.Subnet{ID: renumberedSubnetID, CIDR: "100.64.59.0/24"})
+	kea.Leases = []map[string]any{keafake.Lease(rtMAC, rtLeaseIP, renumberedSubnetID)}
+	e := newRTEnv(t, kea, keaservice.PinModeLog, rtNetworkNamespace(), rtNetworkConfiguration())
+
+	e.reconcile(t)
+
+	nc := e.getNC(t)
+	if nc.Status.Phase != "Ready" {
+		t.Fatalf("phase = %q (%s), want Ready", nc.Status.Phase, nc.Status.Message)
+	}
+	if h := kea.HostFor(rtMAC, rtSubnetID); h == nil || h["ip-address"] != rtLeaseIP {
+		t.Fatalf("reservation in subnet %d = %v, want one holding %s", rtSubnetID, h, rtLeaseIP)
+	}
+	if kea.HostFor(rtMAC, renumberedSubnetID) != nil {
+		t.Fatalf("reservation created in the lease's stale subnet %d", renumberedSubnetID)
+	}
+}
+
 // DHCPReserved used to be true for MAC-only reservations, which pin nothing.
 func TestReconcile_MACOnlyReservation_NotReportedReserved(t *testing.T) {
 	kea := rtKea()

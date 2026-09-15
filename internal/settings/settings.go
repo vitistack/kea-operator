@@ -18,6 +18,8 @@ func Init() {
 	viper.SetDefault(consts.KEA_DISABLE_KEEPALIVES, true)
 	viper.SetDefault(consts.KEA_REQUIRE_CLIENT_CLASSES, "biosclients,ueficlients,ipxeclients")
 	viper.SetDefault(consts.KEA_STRICT_DEFAULTS, false)
+	viper.SetDefault(consts.KEA_PIN_RESERVATIONS, "log")
+	viper.SetDefault(consts.KEA_CLEANUP_TIMEOUT, "15m")
 
 	dotenv.LoadDotEnv()
 
@@ -47,11 +49,14 @@ func printEnvironmentSettings() {
 		consts.KEA_TLS_INSECURE,
 		consts.KEA_TLS_SERVER_NAME,
 		consts.KEA_TIMEOUT_SECONDS,
+		consts.KEA_CONNECT_TIMEOUT_SECONDS,
 		consts.KEA_TLS_SECRET_NAME,
 		consts.KEA_TLS_SECRET_NAMESPACE,
 		consts.KEA_DISABLE_KEEPALIVES,
 		consts.KEA_REQUIRE_CLIENT_CLASSES,
 		consts.KEA_STRICT_DEFAULTS,
+		consts.KEA_PIN_RESERVATIONS,
+		consts.KEA_CLEANUP_TIMEOUT,
 	}
 
 	for _, s := range settings {

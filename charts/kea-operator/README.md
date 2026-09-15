@@ -81,6 +81,7 @@ helm uninstall vitistack-kea-operator --namespace vitistack
 | Parameter          | Description                              | Default                               |
 | ------------------ | ---------------------------------------- | ------------------------------------- |
 | `replicaCount`     | Number of replicas                       | `1`                                   |
+| `leaderElection.enabled` | Run with `--leader-elect` (one active replica) | `true`                    |
 | `image.repository` | Image repository                         | `ghcr.io/vitistack/viti-kea-operator` |
 | `image.pullPolicy` | Image pull policy                        | `IfNotPresent`                        |
 | `image.tag`        | Image tag (defaults to chart appVersion) | `""`                                  |
@@ -104,9 +105,12 @@ helm uninstall vitistack-kea-operator --namespace vitistack
 | `kea.url`                  | Primary KEA server URL                 | `""`                                    |
 | `kea.secondaryUrl`         | Secondary KEA server URL (HA failover) | `""`                                    |
 | `kea.port`                 | KEA server port                        | `"8000"`                                |
-| `kea.timeoutSeconds`       | API request timeout                    | `"10"`                                  |
+| `kea.timeoutSeconds`       | Whole API request timeout              | `"60"`                                  |
+| `kea.connectTimeoutSeconds` | Connect + TLS handshake timeout (fast failover) | `"10"`                         |
 | `kea.disableKeepalives`    | Disable HTTP keep-alive                | `"true"`                                |
 | `kea.requireClientClasses` | Required client classes for pools      | `"biosclients,ueficlients,ipxeclients"` |
+| `kea.pinReservations`      | Pin MAC-only reservations to the lease IP: `off`, `log`, `enforce` | `"log"`     |
+| `kea.cleanupTimeout`       | How long deletion retries Kea cleanup before removing the finalizer | `"15m"`    |
 
 ### KEA Authentication
 

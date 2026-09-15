@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -39,6 +40,7 @@ import (
 	subnetutil "github.com/vitistack/kea-operator/internal/util/subnet"
 	"github.com/vitistack/kea-operator/pkg/interfaces/keainterface"
 	"github.com/vitistack/kea-operator/pkg/models/keamodels"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,7 +57,15 @@ type NetworkConfigurationReconciler struct {
 	Scheme    *runtime.Scheme
 	KeaClient keainterface.KeaClient
 	Kea       *keaservice.Service
+
+	// CleanupTimeout is how long deletion keeps retrying a failed Kea
+	// reservation cleanup before removing the finalizer anyway.
+	CleanupTimeout time.Duration
 }
+
+// skipCleanupAnnotation, set to "true" on a NetworkConfiguration being
+// deleted, removes the finalizer without touching Kea.
+const skipCleanupAnnotation = "vitistack.io/kea-skip-cleanup"
 
 const (
 	finalizerName              = "vitistack.io/networkconfiguration-finalizer"
@@ -73,7 +83,16 @@ const (
 	// enough to recover quickly from a flapping Kea peer, long enough not to
 	// pile on if the Kea Control Agent is overloaded.
 	RequeueDelayError = 30 * time.Second
+	// RequeueDelayNetworkNamespaceMissing is the retry delay while an NC's
+	// NetworkNamespace doesn't exist (yet). NetworkNamespaces aren't watched,
+	// so without a retry the NC would wait for its own next change.
+	RequeueDelayNetworkNamespaceMissing = 2 * time.Minute
+	// DefaultCleanupTimeout is the CleanupTimeout used when none is configured.
+	DefaultCleanupTimeout = 15 * time.Minute
 )
+
+// errNoNetworkNamespace reports that a namespace has no NetworkNamespace.
+var errNoNetworkNamespace = errors.New("no NetworkNamespace found")
 
 // deprecationWarned tracks namespaces for which the deprecation warning has already been logged,
 // so we don't spam the logs on every reconcile loop.
@@ -98,6 +117,16 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Handle deletion before any triage: if we ever claimed this NC (it carries
+	// our finalizer), cleanup must run even if its provider or NetworkNamespace
+	// changed since. NCs without our finalizer were never ours.
+	if !nc.GetDeletionTimestamp().IsZero() {
+		if !viticommonfinalizers.Has(nc, finalizerName) {
+			return ctrl.Result{}, nil
+		}
+		return r.handleDeletion(ctx, nc, log)
+	}
+
 	// Provider triage — if spec.provider is explicitly set to something other
 	// than 'kea', this NetworkConfiguration belongs to another operator.
 	// Skip silently so we don't spam logs for resources that aren't ours.
@@ -108,21 +137,16 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// Handle deletion before triage: if the NC has our finalizer, we must
-	// run cleanup regardless of current NN state.
-	if !nc.GetDeletionTimestamp().IsZero() {
-		return r.handleDeletion(ctx, nc, log)
-	}
-
 	// Fetch the NetworkNamespace silently. We need it to decide whether this
 	// NC is actually for us (type=dhcp or unset default) before logging.
 	nn, fallbackUsed, err := r.getNetworkNamespace(ctx, req.Namespace, nc.Spec.NetworkNamespaceName)
 	if err != nil {
 		// NN fetch failed — can't determine ownership. Log at V(1) so we don't
-		// spam for resources that likely aren't ours; the user will see the
-		// error via the NC status if we've already claimed it.
-		log.V(1).Info("unable to fetch NetworkNamespace for triage", "namespace", req.Namespace, "error", err.Error())
-		return ctrl.Result{}, nil
+		// spam for resources that likely aren't ours, and retry: the NN may not
+		// exist yet, and NetworkNamespaces aren't watched.
+		retry := networkNamespaceRetryDelay(err)
+		log.V(1).Info("unable to fetch NetworkNamespace for triage", "namespace", req.Namespace, "error", err.Error(), "retryIn", retry)
+		return ctrl.Result{RequeueAfter: retry}, nil
 	}
 
 	// Type triage — if the NN has an explicit non-DHCP allocation type, this
@@ -261,22 +285,32 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	subnetID, subnetInfo := r.resolveSubnetInfo(ctx, subnetID, ipv4Prefix, log)
 
 	// Process MAC reservations
-	macToIP, macToSubnetID, errs := r.processMACReservations(ctx, macs, subnetID, ipv4Prefix, log)
+	outcomes, errs, warnings := r.processMACReservations(ctx, nc, macs, subnetID, ipv4Prefix, log)
+	statusInterfaces := r.buildStatusInterfaces(nc, outcomes, ipv4Prefix, subnetInfo)
+	return r.reportReservations(ctx, nc, len(macs), outcomes, errs, warnings, statusInterfaces), nil
+}
 
-	// Build status interfaces
-	statusInterfaces := r.buildStatusInterfaces(nc, macToIP, macToSubnetID, ipv4Prefix, subnetInfo)
+// reportReservations writes the outcome of processMACReservations to status
+// and picks when to reconcile next.
+func (r *NetworkConfigurationReconciler) reportReservations(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration, totalMACs int, outcomes map[string]macOutcome, errs, warnings []string, statusInterfaces []vitistackcrdsv1alpha1.NetworkConfigurationInterface) ctrl.Result {
+	resolvedIPs := 0
+	for _, o := range outcomes {
+		if o.ip != "" {
+			resolvedIPs++
+		}
+	}
 
 	// Handle errors
 	if len(errs) > 0 {
 		_ = r.setCondition(ctx, nc, viticommonconditions.New(
 			conditionTypeReady, metav1.ConditionFalse, conditionReasonError, fmt.Sprintf("reservation errors: %s", strings.Join(errs, "; ")), nc.GetGeneration(),
 		))
-		_ = r.updateStatus(ctx, nc, "Error", "Failed", strings.Join(errs, "; "), statusInterfaces)
-		return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
+		_ = r.updateStatus(ctx, nc, "Error", "Failed", withWarnings(strings.Join(errs, "; "), warnings), statusInterfaces)
+		return ctrl.Result{RequeueAfter: RequeueDelayError}
 	}
 
 	// Build success message
-	statusMsg := r.buildSuccessMessage(len(macs), len(macToIP))
+	statusMsg := withWarnings(r.buildSuccessMessage(totalMACs, resolvedIPs), warnings)
 
 	_ = r.setCondition(ctx, nc, viticommonconditions.New(
 		conditionTypeReady, metav1.ConditionTrue, conditionReasonConfigured, "configured", nc.GetGeneration(),
@@ -287,21 +321,47 @@ func (r *NetworkConfigurationReconciler) Reconcile(ctx context.Context, req ctrl
 	// settling. Re-check on the short interval instead of waiting the full
 	// success resync, so the IP lands in status — and therefore in the
 	// downstream Machine's public IPs — in seconds rather than minutes.
-	if len(macToIP) < len(macs) {
-		return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
+	if resolvedIPs < totalMACs {
+		return ctrl.Result{RequeueAfter: RequeueDelayError}
 	}
-	return ctrl.Result{RequeueAfter: RequeueDelaySuccess}, nil
+	return ctrl.Result{RequeueAfter: RequeueDelaySuccess}
 }
 
-// handleDeletion handles the deletion of a NetworkConfiguration
+// handleDeletion removes this NC's reservations from Kea, then the finalizer.
+// When cleanup fails it retries until CleanupTimeout has passed since deletion
+// started, then removes the finalizer anyway so a Kea outage can't block
+// teardown indefinitely. The skip-cleanup annotation removes it at once.
 func (r *NetworkConfigurationReconciler) handleDeletion(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration, log logr.Logger) (ctrl.Result, error) {
-	if err := r.cleanupReservations(ctx, nc); err != nil {
-		log.V(1).Info("reservation cleanup during deletion encountered an issue", "error", err)
+	if nc.GetAnnotations()[skipCleanupAnnotation] == "true" {
+		log.Info("skipping Kea reservation cleanup on request", "annotation", skipCleanupAnnotation, "name", nc.Name, "namespace", nc.Namespace)
+		return r.removeFinalizer(ctx, nc)
 	}
-	if err := viticommonfinalizers.Remove(ctx, r.Client, nc, finalizerName); err != nil {
+	if err := r.cleanupReservations(ctx, nc); err != nil {
+		timeout := r.cleanupTimeout()
+		if waited := time.Since(nc.GetDeletionTimestamp().Time); waited < timeout {
+			log.Info("Kea reservation cleanup failed, retrying before removing the finalizer",
+				"name", nc.Name, "namespace", nc.Namespace, "error", err.Error(), "givingUpIn", (timeout - waited).Round(time.Second))
+			_ = r.updateStatus(ctx, nc, "Deleting", "InProgress", fmt.Sprintf("Waiting for Kea reservation cleanup: %v", err), nil)
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, nil
+		}
+		log.Error(err, "Kea reservation cleanup still failing, removing the finalizer anyway; reservations may remain in Kea",
+			"name", nc.Name, "namespace", nc.Namespace, "timeout", timeout)
+	}
+	return r.removeFinalizer(ctx, nc)
+}
+
+func (r *NetworkConfigurationReconciler) removeFinalizer(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration) (ctrl.Result, error) {
+	if err := viticommonfinalizers.Remove(ctx, r.Client, nc, finalizerName); client.IgnoreNotFound(err) != nil {
 		return reconcileutil.Requeue(err)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *NetworkConfigurationReconciler) cleanupTimeout() time.Duration {
+	if r.CleanupTimeout > 0 {
+		return r.CleanupTimeout
+	}
+	return DefaultCleanupTimeout
 }
 
 // resolveSubnetInfo fetches subnet details for subnetID, transparently recovering
@@ -328,11 +388,22 @@ func (r *NetworkConfigurationReconciler) resolveSubnetInfo(ctx context.Context, 
 	return subnetID, nil
 }
 
-// processMACReservations processes all MAC address reservations
-func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Context, macs []string, subnetID int, ipv4Prefix string, log logr.Logger) (map[string]string, map[string]int, []string) {
-	macToIP := make(map[string]string)
-	macToSubnetID := make(map[string]int)
-	var errs []string
+// macOutcome is what status reports for one MAC.
+type macOutcome struct {
+	ip       string // address the machine holds; "" when unknown
+	reserved bool   // the Kea reservation holds ip
+}
+
+// processMACReservations ensures a Kea reservation for each MAC and returns
+// what status should report per MAC, plus per-MAC errors and warnings.
+//
+// When Kea fails for a MAC, its outcome keeps the lease IP if known, else the
+// IP status reported before: other operators copy these IPs into Machine
+// status, so a Kea problem must never make them disappear.
+func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration, macs []string, subnetID int, ipv4Prefix string, log logr.Logger) (map[string]macOutcome, []string, []string) {
+	outcomes := make(map[string]macOutcome, len(macs))
+	var errs, warnings []string
+	previous := previousStatusByMAC(nc)
 
 	var ipnet *net.IPNet
 	if _, n, e := net.ParseCIDR(strings.TrimSpace(ipv4Prefix)); e == nil {
@@ -340,13 +411,16 @@ func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Cont
 	}
 
 	for _, mac := range macs {
-		ip, leaseSubnetID, _ := r.Kea.GetLeaseIPv4ForMAC(ctx, mac)
-
-		sid := subnetID
-		if leaseSubnetID > 0 {
-			sid = leaseSubnetID
+		ip, leaseSubnetID, err := r.Kea.GetLeaseIPv4ForMAC(ctx, mac)
+		if err != nil && !errors.Is(err, keaservice.ErrNoLease) {
+			errs = append(errs, fmt.Sprintf("%s: %v", mac, err))
+			outcomes[mac] = lastKnownOutcome(previous[mac], "")
+			continue
 		}
 
+		// The lease decides the subnet only when its IP belongs to this
+		// network; a stale lease from elsewhere must not.
+		sid := subnetID
 		if ip != "" && ipnet != nil {
 			if p := net.ParseIP(ip); p == nil || p.To4() == nil || !ipnet.Contains(p) {
 				log.Info("lease IP not within expected prefix, will create MAC-only reservation",
@@ -354,61 +428,102 @@ func (r *NetworkConfigurationReconciler) processMACReservations(ctx context.Cont
 				ip = ""
 			}
 		}
+		if ip != "" && leaseSubnetID > 0 {
+			sid = leaseSubnetID
+		}
 
-		created, err := r.Kea.EnsureReservationForMACIP(ctx, mac, sid, ip)
+		res, err := r.Kea.EnsureReservationForMACIP(ctx, mac, sid, ip)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", mac, err))
+			outcomes[mac] = lastKnownOutcome(previous[mac], ip)
 			continue
 		}
-
-		macToSubnetID[mac] = sid
-		if ip != "" {
-			macToIP[mac] = ip
-			if created {
-				log.Info("configured DHCP reservation with IP", "mac", mac, "ip", ip, "subnetID", sid, "subnet", ipv4Prefix)
-			} else {
-				log.V(1).Info("DHCP reservation already exists", "mac", mac, "ip", ip, "subnetID", sid, "subnet", ipv4Prefix)
-			}
-		} else {
-			if created {
-				log.Info("created MAC-only reservation, IP will be auto-allocated on DHCP request", "mac", mac, "subnetID", sid, "subnet", ipv4Prefix)
-			} else {
-				log.V(1).Info("MAC-only reservation already exists", "mac", mac, "subnetID", sid, "subnet", ipv4Prefix)
-			}
+		if res.Warning != "" {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", mac, res.Warning))
+			log.Info("DHCP reservation not pinned", "mac", mac, "leaseIP", ip, "subnetID", sid, "reason", res.Warning)
 		}
+		logReservationResult(log, mac, ip, sid, ipv4Prefix, res)
+		outcomes[mac] = macOutcome{ip: ip, reserved: res.Pinned}
 	}
 
-	return macToIP, macToSubnetID, errs
+	return outcomes, errs, warnings
+}
+
+func logReservationResult(log logr.Logger, mac, ip string, sid int, ipv4Prefix string, res keaservice.ReservationResult) {
+	kv := []any{"mac", mac, "ip", ip, "subnetID", sid, "subnet", ipv4Prefix}
+	switch {
+	case res.Upgraded:
+		log.Info("pinned DHCP reservation to the lease IP", kv...)
+	case res.WouldPin:
+		log.Info("would pin DHCP reservation to the lease IP (set "+consts.KEA_PIN_RESERVATIONS+"=enforce to apply)", kv...)
+	case res.Created && ip != "":
+		log.Info("configured DHCP reservation with IP", kv...)
+	case res.Created:
+		log.Info("created MAC-only reservation, IP will be auto-allocated on DHCP request", kv...)
+	case ip != "":
+		log.V(1).Info("DHCP reservation already exists", append(kv, "pinned", res.Pinned)...)
+	default:
+		log.V(1).Info("MAC-only reservation already exists", kv...)
+	}
+}
+
+// lastKnownOutcome is the outcome for a MAC Kea failed on: the lease IP when
+// known, else what status reported before.
+func lastKnownOutcome(prev vitistackcrdsv1alpha1.NetworkConfigurationInterface, leaseIP string) macOutcome {
+	prevIP := ""
+	if len(prev.IPv4Addresses) > 0 {
+		prevIP = prev.IPv4Addresses[0]
+	}
+	if leaseIP != "" {
+		return macOutcome{ip: leaseIP, reserved: prev.DHCPReserved && prevIP == leaseIP}
+	}
+	return macOutcome{ip: prevIP, reserved: prev.DHCPReserved}
+}
+
+// previousStatusByMAC indexes the status interfaces an earlier reconcile wrote by normalized MAC.
+func previousStatusByMAC(nc *vitistackcrdsv1alpha1.NetworkConfiguration) map[string]vitistackcrdsv1alpha1.NetworkConfigurationInterface {
+	out := make(map[string]vitistackcrdsv1alpha1.NetworkConfigurationInterface, len(nc.Status.NetworkInterfaces))
+	for _, iface := range nc.Status.NetworkInterfaces {
+		out[normalizeMAC(iface.MacAddress)] = iface
+	}
+	return out
+}
+
+func normalizeMAC(mac string) string {
+	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(mac, "-", ":")))
+}
+
+// withWarnings appends reservation warnings to a status message.
+func withWarnings(msg string, warnings []string) string {
+	if len(warnings) == 0 {
+		return msg
+	}
+	return msg + "; warnings: " + strings.Join(warnings, "; ")
 }
 
 // buildStatusInterfaces builds the status interface array with all available information
-func (r *NetworkConfigurationReconciler) buildStatusInterfaces(nc *vitistackcrdsv1alpha1.NetworkConfiguration, macToIP map[string]string, macToSubnetID map[string]int, ipv4Prefix string, subnetInfo *keaservice.SubnetInfo) []vitistackcrdsv1alpha1.NetworkConfigurationInterface {
+func (r *NetworkConfigurationReconciler) buildStatusInterfaces(nc *vitistackcrdsv1alpha1.NetworkConfiguration, outcomes map[string]macOutcome, ipv4Prefix string, subnetInfo *keaservice.SubnetInfo) []vitistackcrdsv1alpha1.NetworkConfigurationInterface {
 	statusInterfaces := make([]vitistackcrdsv1alpha1.NetworkConfigurationInterface, 0, len(nc.Spec.NetworkInterfaces))
+	previous := previousStatusByMAC(nc)
 
 	for _, iface := range nc.Spec.NetworkInterfaces {
-		normalizedMAC := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(iface.MacAddress, "-", ":")))
+		normalizedMAC := normalizeMAC(iface.MacAddress)
 		statusIface := vitistackcrdsv1alpha1.NetworkConfigurationInterface{
-			Name:         iface.Name,
-			MacAddress:   iface.MacAddress,
-			Vlan:         iface.Vlan,
-			DHCPReserved: false,
+			Name:       iface.Name,
+			MacAddress: iface.MacAddress,
+			Vlan:       iface.Vlan,
+			IPv4Subnet: ipv4Prefix,
 		}
 
-		// Check if reservation was successfully created
-		if _, ok := macToSubnetID[normalizedMAC]; ok {
-			statusIface.DHCPReserved = true
+		if o, ok := outcomes[normalizedMAC]; ok {
+			statusIface.DHCPReserved = o.reserved
+			if o.ip != "" {
+				statusIface.IPv4Addresses = []string{o.ip}
+			}
 		}
 
-		// Set IP and subnet info
-		if ip, ok := macToIP[normalizedMAC]; ok {
-			statusIface.IPv4Addresses = []string{ip}
-			statusIface.IPv4Subnet = ipv4Prefix
-		} else {
-			// Still set subnet even if no IP yet
-			statusIface.IPv4Subnet = ipv4Prefix
-		}
-
-		// Add gateway and DNS from subnet info if available
+		// Add gateway and DNS from subnet info if available; if Kea couldn't
+		// provide it this time, keep what status already reported.
 		if subnetInfo != nil {
 			if subnetInfo.Gateway != "" {
 				statusIface.IPv4Gateway = subnetInfo.Gateway
@@ -416,6 +531,9 @@ func (r *NetworkConfigurationReconciler) buildStatusInterfaces(nc *vitistackcrds
 			if len(subnetInfo.DNS) > 0 {
 				statusIface.DNS = subnetInfo.DNS
 			}
+		} else if prev, ok := previous[normalizedMAC]; ok {
+			statusIface.IPv4Gateway = prev.IPv4Gateway
+			statusIface.DNS = prev.DNS
 		}
 
 		statusInterfaces = append(statusInterfaces, statusIface)
@@ -437,12 +555,39 @@ func (r *NetworkConfigurationReconciler) buildSuccessMessage(totalMACs, resolved
 // NewNetworkConfigurationReconciler constructs a new reconciler, wiring the
 // controller-runtime client/scheme and a Kea service wrapper around the given client.
 func NewNetworkConfigurationReconciler(mgr ctrl.Manager, keaClient keainterface.KeaClient) *NetworkConfigurationReconciler {
+	kea := keaservice.New(keaClient)
+	kea.PinMode = pinModeFromEnv()
 	return &NetworkConfigurationReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		KeaClient: keaClient,
-		Kea:       keaservice.New(keaClient),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		KeaClient:      keaClient,
+		Kea:            kea,
+		CleanupTimeout: cleanupTimeoutFromEnv(),
 	}
+}
+
+// pinModeFromEnv reads KEA_PIN_RESERVATIONS (off, log or enforce). Anything
+// else falls back to log, the mode that never writes.
+func pinModeFromEnv() keaservice.PinMode {
+	raw := strings.ToLower(strings.TrimSpace(viper.GetString(consts.KEA_PIN_RESERVATIONS)))
+	switch mode := keaservice.PinMode(raw); mode {
+	case keaservice.PinModeOff, keaservice.PinModeLog, keaservice.PinModeEnforce:
+		return mode
+	}
+	vlog.Warn("invalid " + consts.KEA_PIN_RESERVATIONS + " value '" + raw + "', using 'log'")
+	return keaservice.PinModeLog
+}
+
+// cleanupTimeoutFromEnv reads KEA_CLEANUP_TIMEOUT as a Go duration (e.g. 15m).
+func cleanupTimeoutFromEnv() time.Duration {
+	raw := strings.TrimSpace(viper.GetString(consts.KEA_CLEANUP_TIMEOUT))
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return d
+	}
+	if raw != "" {
+		vlog.Warn("invalid " + consts.KEA_CLEANUP_TIMEOUT + " value '" + raw + "', using " + DefaultCleanupTimeout.String())
+	}
+	return DefaultCleanupTimeout
 }
 
 // SetupWithManager registers the controller with the manager using the typed
@@ -495,9 +640,23 @@ func (r *NetworkConfigurationReconciler) getNetworkNamespace(ctx context.Context
 		return nil, true, err
 	}
 	if len(nnList.Items) == 0 {
-		return nil, true, fmt.Errorf("no NetworkNamespace found in namespace %s", namespace)
+		return nil, true, fmt.Errorf("%w in namespace %s", errNoNetworkNamespace, namespace)
 	}
 	return &nnList.Items[0], true, nil
+}
+
+// isNetworkNamespaceMissing reports whether getNetworkNamespace failed because
+// the NetworkNamespace doesn't exist, rather than because the API failed.
+func isNetworkNamespaceMissing(err error) bool {
+	return apierrors.IsNotFound(err) || errors.Is(err, errNoNetworkNamespace)
+}
+
+// networkNamespaceRetryDelay picks the retry delay after getNetworkNamespace failed.
+func networkNamespaceRetryDelay(err error) time.Duration {
+	if isNetworkNamespaceMissing(err) {
+		return RequeueDelayNetworkNamespaceMissing
+	}
+	return RequeueDelayError
 }
 
 // extractMACsFromTypedNetworkConfiguration reads MAC addresses strictly from
@@ -537,27 +696,61 @@ func extractMACsFromTypedNetworkConfiguration(networkconf *vitistackcrdsv1alpha1
 	return out
 }
 
-// cleanupReservations performs a best-effort removal of reservations on delete.
-// It reads MACs from the typed NetworkConfiguration, resolves the subnet-id for
-// the namespace prefix, and issues reservation deletions in Kea.
+// cleanupReservations removes this NC's reservations from Kea. It returns nil
+// when nothing is left to clean up (no MACs, no known subnet, subnet or
+// reservation already gone) and an error only when Kea or the Kubernetes API
+// couldn't be asked — the caller retries those.
 func (r *NetworkConfigurationReconciler) cleanupReservations(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration) error {
-	nn, _, err := r.getNetworkNamespace(ctx, nc.GetNamespace(), nc.Spec.NetworkNamespaceName)
-	if err != nil {
-		vlog.Debug("skipping reservation cleanup, NetworkNamespace not available",
-			"namespace", nc.GetNamespace(), "error", err)
-		return err
-	}
-	subnetID, err := r.Kea.GetSubnetID(ctx, nn.Status.IPv4Prefix)
-	if err != nil {
-		vlog.Debug("skipping reservation cleanup, subnet not found in KEA",
-			"ipv4Prefix", nn.Status.IPv4Prefix, "error", err)
-		return err
-	}
+	log := logf.FromContext(ctx)
 	macs := extractMACsFromTypedNetworkConfiguration(nc)
+	if len(macs) == 0 {
+		return nil
+	}
+	prefix, err := r.cleanupPrefix(ctx, nc)
+	if err != nil {
+		return err
+	}
+	if prefix == "" {
+		log.Info("no subnet known for NetworkConfiguration, nothing to clean up in Kea", "name", nc.Name, "namespace", nc.Namespace)
+		return nil
+	}
+	subnetID, err := r.Kea.GetSubnetID(ctx, prefix)
+	if errors.Is(err, keaservice.ErrSubnetNotFound) {
+		log.Info("subnet not found in Kea, nothing to clean up", "ipv4Prefix", prefix, "name", nc.Name, "namespace", nc.Namespace)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("resolving Kea subnet for %s: %w", prefix, err)
+	}
+	var failed []string
 	for _, mac := range macs {
-		_ = r.Kea.DeleteReservationForMAC(ctx, mac, subnetID)
+		if err := r.Kea.DeleteReservationForMAC(ctx, mac, subnetID); err != nil {
+			failed = append(failed, fmt.Sprintf("%s: %v", mac, err))
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("deleting reservations: %s", strings.Join(failed, "; "))
 	}
 	return nil
+}
+
+// cleanupPrefix returns the subnet this NC's reservations live in: the
+// NetworkNamespace's prefix or, once the NetworkNamespace is gone, the subnet
+// recorded in status. Returns "" when neither is known.
+func (r *NetworkConfigurationReconciler) cleanupPrefix(ctx context.Context, nc *vitistackcrdsv1alpha1.NetworkConfiguration) (string, error) {
+	nn, _, err := r.getNetworkNamespace(ctx, nc.GetNamespace(), nc.Spec.NetworkNamespaceName)
+	if err != nil && !isNetworkNamespaceMissing(err) {
+		return "", err
+	}
+	if err == nil && nn.Status.IPv4Prefix != "" {
+		return nn.Status.IPv4Prefix, nil
+	}
+	for _, iface := range nc.Status.NetworkInterfaces {
+		if iface.IPv4Subnet != "" {
+			return iface.IPv4Subnet, nil
+		}
+	}
+	return "", nil
 }
 
 // setCondition patches the status.conditions on the provided Unstructured object

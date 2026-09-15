@@ -78,7 +78,7 @@ fix: ## Run go fix against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile coverage.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -race $$(go list ./... | grep -v /e2e) -coverprofile coverage.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -110,7 +110,7 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: fmt golangci-lint ## Run go fmt and the golangci-lint linter
 	$(GOLANGCI_LINT) run
 
 .PHONY: lint-fix
@@ -338,6 +338,9 @@ $(GOVULNCHECK): $(LOCALBIN)
 	chmod +x $(GOVULNCHECK)
 
 ##@ Security
+.PHONY: audit
+audit: gosec govulncheck ## Run all security scans: gosec and govulncheck (fails on findings)
+
 .PHONY: gosec
 gosec: install-security-scanner ## Run gosec security scan (fails on findings)
 	$(GOSEC) ./...

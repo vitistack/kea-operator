@@ -4,7 +4,7 @@ A Helm chart for deploying the VitiStack KEA Operator, which manages DHCPv4 rese
 
 ## Prerequisites
 
-- Kubernetes 1.26+
+- Kubernetes 1.27+
 - Helm 3.x
 - VitiStack CRDs installed (NetworkConfiguration, NetworkNamespace)
 

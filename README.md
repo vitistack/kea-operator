@@ -152,8 +152,18 @@ Kea client
 - `KEA_URL` (preferred) full URL, e.g. `http://localhost:8000`
 - `KEA_SECONDARY_URL` (optional) secondary URL for HA failover, e.g. `http://localhost:8001`
 - `KEA_BASE_URL` or `KEA_HOST` + `KEA_PORT`
-- `KEA_TIMEOUT_SECONDS` (default 10)
+- `KEA_TIMEOUT_SECONDS` (default 60) — whole request, including Kea's time to answer
+- `KEA_CONNECT_TIMEOUT_SECONDS` (default 10) — TCP connect + TLS handshake, so an unreachable primary fails over quickly
 - `KEA_DISABLE_KEEPALIVES` (true/false)
+
+Reservations
+
+- `KEA_PIN_RESERVATIONS` (default `log`) — upgrade a MAC-only reservation to hold the MAC's current lease IP.
+  `off`: never; `log`: log what would be pinned and any conflicts, write nothing; `enforce`: pin.
+  Reservations that already hold an IP, or have settings of their own (hostname, options, ...), are never changed.
+- `KEA_CLEANUP_TIMEOUT` (default `15m`) — when deleting a NetworkConfiguration, how long a failed Kea cleanup is
+  retried before the finalizer is removed anyway. Annotate the NetworkConfiguration with
+  `vitistack.io/kea-skip-cleanup: "true"` to remove the finalizer without touching Kea.
 
 Authentication
 

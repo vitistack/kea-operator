@@ -113,6 +113,13 @@ func OptionTimeout(d time.Duration) KeaOption {
 	})
 }
 
+// OptionConnectTimeout bounds TCP connect and TLS handshake, independent of the request timeout.
+func OptionConnectTimeout(d time.Duration) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		cfg.ConnectTimeout = d
+	})
+}
+
 // OptionBasicAuth sets basic auth credentials (mutually exclusive with TLS client certificate auth).
 func OptionBasicAuth(username, password string) KeaOption {
 	return optionFunc(func(cfg *keaClient) {
@@ -134,7 +141,8 @@ func OptionBasicAuth(username, password string) KeaOption {
 //	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
 //	KEA_TLS_INSECURE (true/false)
 //	KEA_TLS_SERVER_NAME
-//	KEA_TIMEOUT_SECONDS
+//	KEA_TIMEOUT_SECONDS (default 60)
+//	KEA_CONNECT_TIMEOUT_SECONDS (default 10)
 func OptionFromEnv() KeaOption {
 	return optionFunc(func(cfg *keaClient) {
 		viper.AutomaticEnv()
@@ -150,6 +158,7 @@ func OptionFromEnv() KeaOption {
 		_ = viper.BindEnv(consts.KEA_TLS_INSECURE)
 		_ = viper.BindEnv(consts.KEA_TLS_SERVER_NAME)
 		_ = viper.BindEnv(consts.KEA_TIMEOUT_SECONDS)
+		_ = viper.BindEnv(consts.KEA_CONNECT_TIMEOUT_SECONDS)
 		_ = viper.BindEnv(consts.KEA_DISABLE_KEEPALIVES)
 		_ = viper.BindEnv(consts.KEA_BASIC_AUTH_USERNAME)
 		_ = viper.BindEnv(consts.KEA_BASIC_AUTH_PASSWORD)
@@ -204,6 +213,9 @@ func OptionFromEnv() KeaOption {
 			if cfg.HttpClient != nil {
 				cfg.HttpClient.Timeout = cfg.Timeout
 			}
+		}
+		if secs := viper.GetInt(consts.KEA_CONNECT_TIMEOUT_SECONDS); secs > 0 {
+			cfg.ConnectTimeout = time.Duration(secs) * time.Second
 		}
 		if viper.GetBool(consts.KEA_DISABLE_KEEPALIVES) {
 			cfg.disableKeepAlives = true

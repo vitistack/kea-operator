@@ -40,6 +40,10 @@ spec:
           {{- end }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.leaderElection.enabled }}
+          args:
+            - --leader-elect
+          {{- end }}
           env:
             # Controller concurrency: max objects reconciled in parallel
             - name: MAX_CONCURRENT_RECONCILES
@@ -76,6 +80,10 @@ spec:
             - name: KEA_TIMEOUT_SECONDS
               value: {{ .Values.kea.timeoutSeconds | quote }}
             {{- end }}
+            {{- if .Values.kea.connectTimeoutSeconds }}
+            - name: KEA_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.kea.connectTimeoutSeconds | quote }}
+            {{- end }}
             {{- if .Values.kea.disableKeepalives }}
             - name: KEA_DISABLE_KEEPALIVES
               value: {{ .Values.kea.disableKeepalives | quote }}
@@ -83,6 +91,14 @@ spec:
             {{- if .Values.kea.requireClientClasses }}
             - name: KEA_REQUIRE_CLIENT_CLASSES
               value: {{ .Values.kea.requireClientClasses | quote }}
+            {{- end }}
+            {{- if .Values.kea.pinReservations }}
+            - name: KEA_PIN_RESERVATIONS
+              value: {{ .Values.kea.pinReservations | quote }}
+            {{- end }}
+            {{- if .Values.kea.cleanupTimeout }}
+            - name: KEA_CLEANUP_TIMEOUT
+              value: {{ .Values.kea.cleanupTimeout | quote }}
             {{- end }}
             # KEA authentication
             {{- if .Values.kea.auth.existingSecret }}

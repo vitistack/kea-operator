@@ -142,17 +142,35 @@ affinity: {}
 
 # KEA DHCP server configuration
 kea:
-  # Primary KEA server URL (e.g., https://kea-dhcp.example.com:8000)
+  # Primary KEA server URL (e.g., https://kea-dhcp.example.com:8000). This is
+  # the server that matters: backups are only used once it has kept failing.
   url: ""
-  # Secondary KEA server URL for HA failover (optional)
+  # Backup KEA server URLs, asked in order, once each, when the primary has
+  # used up its retries (optional).
+  secondaryUrls: []
+  # - "https://kea-dhcp-2.example.com:8000"
+  # A single backup URL. Still supported; tried before secondaryUrls.
   secondaryUrl: ""
   # KEA server port (used if url doesn't include port)
   port: "8000"
-  # Timeout in seconds for a whole KEA API request, including Kea's time to answer
+  # Timeout in seconds for one attempt of a KEA API request, including Kea's
+  # time to answer. A primary that accepts connections but never answers
+  # fails over after (primaryRetries + 1) x this.
   timeoutSeconds: "60"
   # Timeout in seconds for connecting to a KEA server (TCP + TLS handshake).
-  # Kept short so an unreachable primary fails over to the secondary quickly.
+  # Kept short so an unreachable primary is retried, and fails over, quickly.
   connectTimeoutSeconds: "10"
+  # Retries on the primary when a request times out, can't connect or gets
+  # HTTP 502/503/504, before the backups are used. 0 fails over at once.
+  primaryRetries: "3"
+  # Wait before the first retry; doubles per retry up to retryMaxBackoff
+  # (Go durations).
+  retryBackoff: "1s"
+  retryMaxBackoff: "10s"
+  # After a failover, how long requests skip the primary and go straight to
+  # the backups, before the primary is tried first again. "0s" always tries
+  # the primary first.
+  primaryCooldown: "30s"
   # Disable HTTP keep-alive connections
   disableKeepalives: "true"
   # Comma-separated list of required client classes for pools

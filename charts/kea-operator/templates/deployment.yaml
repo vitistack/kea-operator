@@ -72,6 +72,10 @@ spec:
             - name: KEA_SECONDARY_URL
               value: {{ .Values.kea.secondaryUrl | quote }}
             {{- end }}
+            {{- if .Values.kea.secondaryUrls }}
+            - name: KEA_SECONDARY_URLS
+              value: {{ join "," .Values.kea.secondaryUrls | quote }}
+            {{- end }}
             {{- if .Values.kea.port }}
             - name: KEA_PORT
               value: {{ .Values.kea.port | quote }}
@@ -83,6 +87,23 @@ spec:
             {{- if .Values.kea.connectTimeoutSeconds }}
             - name: KEA_CONNECT_TIMEOUT_SECONDS
               value: {{ .Values.kea.connectTimeoutSeconds | quote }}
+            {{- end }}
+            {{- /* 0 is a valid retry count, so test for presence, not truthiness. */}}
+            {{- if not (kindIs "invalid" .Values.kea.primaryRetries) }}
+            - name: KEA_PRIMARY_RETRIES
+              value: {{ .Values.kea.primaryRetries | quote }}
+            {{- end }}
+            {{- if .Values.kea.retryBackoff }}
+            - name: KEA_RETRY_BACKOFF
+              value: {{ .Values.kea.retryBackoff | quote }}
+            {{- end }}
+            {{- if .Values.kea.retryMaxBackoff }}
+            - name: KEA_RETRY_MAX_BACKOFF
+              value: {{ .Values.kea.retryMaxBackoff | quote }}
+            {{- end }}
+            {{- if .Values.kea.primaryCooldown }}
+            - name: KEA_PRIMARY_COOLDOWN
+              value: {{ .Values.kea.primaryCooldown | quote }}
             {{- end }}
             {{- if .Values.kea.disableKeepalives }}
             - name: KEA_DISABLE_KEEPALIVES

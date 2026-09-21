@@ -2,10 +2,12 @@ package keaclient
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/vitistack/common/pkg/loggers/vlog"
 	"github.com/vitistack/kea-operator/internal/consts"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -73,13 +75,41 @@ func OptionURL(fullURL string) KeaOption {
 	})
 }
 
-// OptionSecondaryURL sets a secondary URL for HA failover.
+// OptionSecondaryURL adds a backup URL for HA failover.
 func OptionSecondaryURL(fullURL string) KeaOption {
+	return OptionSecondaryURLs(fullURL)
+}
+
+// OptionSecondaryURLs adds backup URLs, asked in order once the primary has
+// used up its retries. Empty entries, duplicates and the primary are dropped.
+func OptionSecondaryURLs(urls ...string) KeaOption {
 	return optionFunc(func(cfg *keaClient) {
-		if fullURL == "" {
-			return
-		}
-		cfg.SecondaryUrl = fullURL
+		cfg.SecondaryUrls = append(cfg.SecondaryUrls, urls...)
+	})
+}
+
+// OptionPrimaryRetries sets how often a transient primary failure is retried
+// before failing over; 0 fails over on the first failure.
+func OptionPrimaryRetries(n int) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		cfg.PrimaryRetries = max(n, 0)
+	})
+}
+
+// OptionRetryBackoff sets the wait before the first primary retry, doubling
+// per retry up to maxBackoff.
+func OptionRetryBackoff(initial, maxBackoff time.Duration) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		cfg.RetryBackoff = initial
+		cfg.RetryMaxBackoff = maxBackoff
+	})
+}
+
+// OptionPrimaryCooldown sets how long requests skip the primary after a
+// failover; 0 always tries the primary first.
+func OptionPrimaryCooldown(d time.Duration) KeaOption {
+	return optionFunc(func(cfg *keaClient) {
+		cfg.PrimaryCooldown = d
 	})
 }
 
@@ -134,9 +164,10 @@ func OptionBasicAuth(username, password string) KeaOption {
 // Supported env vars (see consts):
 //
 //	KEA_URL (full URL with scheme, e.g. https://host:port) or KEA_BASE_URL + optional KEA_PORT
-//	KEA_SECONDARY_URL (optional, for HA failover)
-//	KEA_BASE_URL (or KEA_HOST + optional KEA_PORT)
-//	KEA_SECONDARY_URL (optional, for HA failover)
+//	KEA_SECONDARY_URLS (optional, comma-separated backups, tried in order)
+//	KEA_SECONDARY_URL (optional, single backup; goes before KEA_SECONDARY_URLS)
+//	KEA_PRIMARY_RETRIES (default 3), KEA_RETRY_BACKOFF (default 1s),
+//	KEA_RETRY_MAX_BACKOFF (default 10s), KEA_PRIMARY_COOLDOWN (default 30s)
 //	KEA_BASIC_AUTH_USERNAME, KEA_BASIC_AUTH_PASSWORD (optional, basic auth if no client certs)
 //	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
 //	KEA_TLS_INSECURE (true/false)
@@ -149,6 +180,11 @@ func OptionFromEnv() KeaOption {
 		// Bind expected variables (ignore bind errors deliberately)
 		_ = viper.BindEnv(consts.KEA_URL)
 		_ = viper.BindEnv(consts.KEA_SECONDARY_URL)
+		_ = viper.BindEnv(consts.KEA_SECONDARY_URLS)
+		_ = viper.BindEnv(consts.KEA_PRIMARY_RETRIES)
+		_ = viper.BindEnv(consts.KEA_RETRY_BACKOFF)
+		_ = viper.BindEnv(consts.KEA_RETRY_MAX_BACKOFF)
+		_ = viper.BindEnv(consts.KEA_PRIMARY_COOLDOWN)
 		_ = viper.BindEnv(consts.KEA_BASE_URL)
 		_ = viper.BindEnv(consts.KEA_PORT)
 		_ = viper.BindEnv(consts.KEA_TLS_ENABLED)
@@ -172,9 +208,8 @@ func OptionFromEnv() KeaOption {
 		} else if base != "" {
 			cfg.BaseUrl = base
 		}
-		if secondary != "" {
-			cfg.SecondaryUrl = secondary
-		}
+		cfg.SecondaryUrls = append(cfg.SecondaryUrls, secondary)
+		cfg.SecondaryUrls = append(cfg.SecondaryUrls, strings.Split(viper.GetString(consts.KEA_SECONDARY_URLS), ",")...)
 		if port != "" {
 			cfg.Port = port
 		}
@@ -220,7 +255,50 @@ func OptionFromEnv() KeaOption {
 		if viper.GetBool(consts.KEA_DISABLE_KEEPALIVES) {
 			cfg.disableKeepAlives = true
 		}
+		if n, ok := envNonNegativeInt(consts.KEA_PRIMARY_RETRIES); ok {
+			cfg.PrimaryRetries = n
+		}
+		if d, ok := envDuration(consts.KEA_RETRY_BACKOFF); ok {
+			cfg.RetryBackoff = d
+		}
+		if d, ok := envDuration(consts.KEA_RETRY_MAX_BACKOFF); ok {
+			cfg.RetryMaxBackoff = d
+		}
+		if d, ok := envDuration(consts.KEA_PRIMARY_COOLDOWN); ok {
+			cfg.PrimaryCooldown = d
+		}
 	})
+}
+
+// envNonNegativeInt reads key as an integer >= 0. ok is false when key is
+// unset or invalid; an invalid value is logged, so the default stays in place.
+func envNonNegativeInt(key string) (int, bool) {
+	raw := strings.TrimSpace(viper.GetString(key))
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		vlog.Warn("invalid " + key + " value '" + raw + "', using the default")
+		return 0, false
+	}
+	return n, true
+}
+
+// envDuration reads key as a non-negative Go duration (e.g. 500ms, 30s). ok is
+// false when key is unset or invalid; an invalid value is logged, so the
+// default stays in place.
+func envDuration(key string) (time.Duration, bool) {
+	raw := strings.TrimSpace(viper.GetString(key))
+	if raw == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		vlog.Warn("invalid " + key + " value '" + raw + "', using the default")
+		return 0, false
+	}
+	return d, true
 }
 
 // OptionTLSPEM sets TLS data directly from in-memory PEM bytes (takes precedence over file paths).

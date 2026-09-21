@@ -31,7 +31,7 @@ Set one of the following (ordered by precedence):
 
 - `KEA_URL`: full URL, e.g. `http://localhost:8000`
 - or `KEA_BASE_URL`/`KEA_HOST` and optional `KEA_PORT` (default 8000)
-- `KEA_SECONDARY_URL` (optional): secondary URL for HA failover, e.g. `http://localhost:8001`
+- `KEA_SECONDARY_URLS` (optional): comma-separated backup URLs for HA failover, e.g. `http://localhost:8001`
 
 3. Run the controller locally
 
@@ -75,7 +75,7 @@ kubectl create secret generic kea-credentials \
 helm install vitistack-kea-operator oci://ghcr.io/vitistack/helm/kea-operator \
   --namespace vitistack \
   --set kea.url="https://kea1.example.com" \
-  --set kea.secondaryUrl="https://kea2.example.com" \
+  --set "kea.secondaryUrls={https://kea2.example.com}" \
   --set kea.auth.existingSecret="kea-credentials"
 ```
 
@@ -85,7 +85,7 @@ For self-signed or internal CA certificates, add TLS insecure mode:
 helm install vitistack-kea-operator oci://ghcr.io/vitistack/helm/kea-operator \
   --namespace vitistack \
   --set kea.url="https://kea1.example.com" \
-  --set kea.secondaryUrl="https://kea2.example.com" \
+  --set "kea.secondaryUrls={https://kea2.example.com}" \
   --set kea.tls.insecure=true \
   --set kea.auth.existingSecret="kea-credentials"
 ```
@@ -149,12 +149,34 @@ Notes
 
 Kea client
 
-- `KEA_URL` (preferred) full URL, e.g. `http://localhost:8000`
-- `KEA_SECONDARY_URL` (optional) secondary URL for HA failover, e.g. `http://localhost:8001`
+- `KEA_URL` (preferred) full URL of the primary, e.g. `http://localhost:8000`
 - `KEA_BASE_URL` or `KEA_HOST` + `KEA_PORT`
-- `KEA_TIMEOUT_SECONDS` (default 60) — whole request, including Kea's time to answer
-- `KEA_CONNECT_TIMEOUT_SECONDS` (default 10) — TCP connect + TLS handshake, so an unreachable primary fails over quickly
+- `KEA_SECONDARY_URLS` (optional) comma-separated backup URLs, e.g. `http://localhost:8001,http://localhost:8002`
+- `KEA_SECONDARY_URL` (optional) a single backup URL; still supported, and tried before `KEA_SECONDARY_URLS`
+- `KEA_TIMEOUT_SECONDS` (default 60) — one attempt, including Kea's time to answer
+- `KEA_CONNECT_TIMEOUT_SECONDS` (default 10) — TCP connect + TLS handshake of one attempt
 - `KEA_DISABLE_KEEPALIVES` (true/false)
+
+Primary and backups
+
+The primary (`KEA_URL`) is the server that matters; backups are only used once it has kept failing.
+
+1. A request goes to the primary. If it times out, can't connect, or gets HTTP 502/503/504, it is retried there
+   `KEA_PRIMARY_RETRIES` times, waiting `KEA_RETRY_BACKOFF`, doubling up to `KEA_RETRY_MAX_BACKOFF`, between attempts.
+   Other errors (e.g. HTTP 401) and Kea command errors are answers, not outages: they are returned as they are.
+2. When the retries are used up, the backups are asked in order, once each; the first answer wins.
+3. After a failover the primary is skipped for `KEA_PRIMARY_COOLDOWN`, so an outage doesn't cost every request the
+   full retry cycle. Then it is tried first again. If every backup fails during the cooldown, the primary is still
+   asked once before the request fails.
+
+- `KEA_PRIMARY_RETRIES` (default 3) — retries on the primary before failing over; `0` fails over at once
+- `KEA_RETRY_BACKOFF` (default `1s`) — wait before the first retry (Go duration)
+- `KEA_RETRY_MAX_BACKOFF` (default `10s`) — longest wait between retries
+- `KEA_PRIMARY_COOLDOWN` (default `30s`) — how long the primary is skipped after a failover; `0s` always tries it first
+
+With the defaults, a primary that refuses connections fails over after about 7s; one that doesn't answer TCP
+connects after about 47s (4 × 10s connect timeout + waits); one that accepts connections but never answers after
+about 4 minutes (4 × `KEA_TIMEOUT_SECONDS`). Lower `KEA_TIMEOUT_SECONDS` if that last case matters to you.
 
 Reservations
 

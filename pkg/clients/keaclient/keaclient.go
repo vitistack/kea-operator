@@ -9,11 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"os"
@@ -27,13 +30,36 @@ var errUnrecognizedResponse = errors.New("unrecognized Kea response format")
 
 // keaClient talks to the Kea control API. One instance is shared by every
 // concurrent reconcile, so after construction its fields are read-only: Send
-// must never modify them.
+// must never modify them. The one exception is primaryDownUntil, which is
+// atomic.
+//
+// BaseUrl is the primary server and the one that matters: requests go there,
+// and transient failures are retried there, before any backup in
+// SecondaryUrls is asked.
 type keaClient struct {
-	Context      context.Context
-	BaseUrl      string
-	SecondaryUrl string // Optional secondary URL for HA failover
-	Port         string
-	HttpClient   *http.Client
+	Context    context.Context
+	BaseUrl    string
+	Port       string
+	HttpClient *http.Client
+
+	// SecondaryUrls are backup servers, asked in order, once each, when the
+	// primary has used up its retries.
+	SecondaryUrls []string
+	// PrimaryRetries is how many times a transient primary failure (timeout,
+	// connection error, HTTP 502/503/504) is retried before failing over.
+	PrimaryRetries int
+	// RetryBackoff is the wait before the first retry; it doubles per retry,
+	// up to RetryMaxBackoff.
+	RetryBackoff    time.Duration
+	RetryMaxBackoff time.Duration
+	// PrimaryCooldown is how long requests skip the primary after it failed
+	// over, so an outage doesn't cost every request the full retry cycle.
+	// Zero always tries the primary first.
+	PrimaryCooldown time.Duration
+
+	// primaryDownUntil is when the current cooldown ends, in Unix
+	// nanoseconds; 0 while the primary is answering.
+	primaryDownUntil atomic.Int64
 
 	disableKeepAlives bool
 
@@ -68,6 +94,7 @@ func NewKeaClient(baseUrl, port string) *keaClient {
 		OptionPort(port),
 	}
 	kc.applyOptions(options...)
+	kc.normalizeBackups()
 	// Rebuild HTTP client with any provided TLS options
 	kc.buildHTTPClient()
 	return kc
@@ -77,6 +104,7 @@ func NewKeaClient(baseUrl, port string) *keaClient {
 func NewKeaClientWithOptions(opts ...KeaOption) *keaClient {
 	kc := getDefaultKeaConnectionConfig()
 	kc.applyOptions(opts...)
+	kc.normalizeBackups()
 	kc.buildHTTPClient()
 	return kc
 }
@@ -102,10 +130,38 @@ func (kc *keaClient) applyDefaults() {
 	// Connecting is fast when the server is up; don't wait the full request
 	// timeout before failing over. Override via KEA_CONNECT_TIMEOUT_SECONDS.
 	kc.ConnectTimeout = 10 * time.Second
+	// A timeout or a Kea restart usually clears within seconds: retry the
+	// primary with 1s, 2s, 4s waits before any backup is used. Override via
+	// KEA_PRIMARY_RETRIES, KEA_RETRY_BACKOFF and KEA_RETRY_MAX_BACKOFF.
+	kc.PrimaryRetries = 3
+	kc.RetryBackoff = time.Second
+	kc.RetryMaxBackoff = 10 * time.Second
+	// Override via KEA_PRIMARY_COOLDOWN.
+	kc.PrimaryCooldown = 30 * time.Second
 	// Default plain client; replaced by buildHTTPClient()
 	kc.HttpClient = &http.Client{Timeout: kc.Timeout}
 }
 
+// normalizeBackups trims the backup list and drops empty entries, duplicates
+// and the primary itself.
+func (kc *keaClient) normalizeBackups() {
+	seen := map[string]bool{strings.TrimSpace(kc.BaseUrl): true}
+	var backups []string
+	for _, u := range kc.SecondaryUrls {
+		u = strings.TrimSpace(u)
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		backups = append(backups, u)
+	}
+	kc.SecondaryUrls = backups
+}
+
+// Send runs cmd against the primary Kea server. Transient failures there — a
+// timeout, a connection error, HTTP 502/503/504 — are retried with backoff
+// before the backups are asked, in order, once each. After a failover the
+// primary is skipped for PrimaryCooldown, then preferred again.
 func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.Response, error) {
 	// Marshal the request exactly as provided (no double-encoding of command field)
 	body, err := json.Marshal(cmd)
@@ -113,66 +169,177 @@ func (c *keaClient) Send(ctx context.Context, cmd keamodels.Request) (keamodels.
 		return keamodels.Response{}, err
 	}
 
-	// Try primary URL first, then secondary if available
-	servers := []string{c.BaseUrl}
-	if c.SecondaryUrl != "" {
-		servers = append(servers, c.SecondaryUrl)
-	}
-
+	coolingDown := c.primaryCoolingDown()
 	var lastErr error
-	for i, server := range servers {
-		base, err := c.buildURL(server)
-		if err != nil {
-			lastErr = fmt.Errorf("failed to build URL for %s: %w", server, err)
-			continue
+	if !coolingDown {
+		resp, transient, err := c.sendPrimary(ctx, body)
+		if !transient {
+			return resp, err
 		}
-
-		req, err := http.NewRequestWithContext(ctx, "POST", base+"/", bytes.NewReader(body))
-		if err != nil {
-			lastErr = fmt.Errorf("failed to create request for %s: %w", base, err)
-			continue
+		lastErr = err
+		if len(c.SecondaryUrls) > 0 {
+			c.markPrimaryDown(err)
 		}
-		req.Header.Set("Content-Type", "application/json")
-		if c.BasicAuthUsername != "" && c.ClientCertPath == "" && len(c.ClientCertPEM) == 0 {
-			req.SetBasicAuth(c.BasicAuthUsername, c.BasicAuthPassword)
-		}
-
-		// #nosec G704 -- URL is validated via buildURL() using url.Parse
-		resp, err := c.HttpClient.Do(req)
-		if err != nil {
-			if i == 0 && len(servers) > 1 {
-				vlog.Warnf("Primary KEA server failed, trying secondary. primary=%s error=%v", server, err)
-			}
-			lastErr = fmt.Errorf("request failed for %s: %w", base, err)
-			continue
-		}
-
-		data, err := io.ReadAll(resp.Body)
-		if cerr := resp.Body.Close(); cerr != nil {
-			vlog.Errorf("failed to close response body: %v", cerr)
-		}
-		if err != nil {
-			lastErr = fmt.Errorf("failed to read response from %s: %w", base, err)
-			continue
-		}
-
-		// Log successful failover if we're using secondary
-		if i > 0 {
-			vlog.Infof("Successfully failed over to secondary KEA server: url=%s", server)
-		}
-
-		// Kea returns command outcomes, failures included, in the body of an
-		// HTTP 200. Any other status comes from auth, a proxy or a broken
-		// server, so its body must not be read as a command result.
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			return keamodels.Response{}, fmt.Errorf("kea server %s returned HTTP %d: %s", base, resp.StatusCode, snippet(data))
-		}
-
-		return c.parseResponse(data)
 	}
 
-	// All URLs failed
+	for _, server := range c.SecondaryUrls {
+		resp, transient, err := c.sendOnce(ctx, server, body)
+		if !transient {
+			if err == nil {
+				if coolingDown {
+					vlog.Debugf("KEA request answered by backup %s (primary cooling down)", server)
+				} else {
+					vlog.Infof("KEA request failed over to backup %s", server)
+				}
+			}
+			return resp, err
+		}
+		lastErr = err
+	}
+
+	if coolingDown {
+		// Every backup failed while the primary was cooling down: ask it once
+		// more rather than give up without having tried it.
+		resp, transient, err := c.sendOnce(ctx, c.BaseUrl, body)
+		if !transient {
+			if err == nil {
+				c.markPrimaryUp()
+			}
+			return resp, err
+		}
+		lastErr = err
+	}
+
 	return keamodels.Response{}, fmt.Errorf("all KEA servers failed: %w", lastErr)
+}
+
+// sendPrimary sends body to the primary, retrying transient failures up to
+// PrimaryRetries times. transient is true when the primary never answered.
+func (c *keaClient) sendPrimary(ctx context.Context, body []byte) (keamodels.Response, bool, error) {
+	for attempt := 0; ; attempt++ {
+		resp, transient, err := c.sendOnce(ctx, c.BaseUrl, body)
+		if !transient {
+			if err == nil {
+				c.markPrimaryUp()
+			}
+			return resp, false, err
+		}
+		if attempt >= c.PrimaryRetries {
+			return resp, true, err
+		}
+		delay := c.retryDelay(attempt)
+		vlog.Warnf("KEA primary request failed, retry %d of %d in %s: %v", attempt+1, c.PrimaryRetries, delay, err)
+		if !sleepCtx(ctx, delay) {
+			return keamodels.Response{}, false, fmt.Errorf("stopped retrying KEA primary: %w (last error: %v)", ctx.Err(), err)
+		}
+	}
+}
+
+// sendOnce makes one attempt against server. transient is true when the
+// server failed rather than answered — a timeout, a connection error or HTTP
+// 502/503/504 — so another attempt or server may succeed. Anything else,
+// success included, is final, as is a cancelled ctx.
+func (c *keaClient) sendOnce(ctx context.Context, server string, body []byte) (keamodels.Response, bool, error) {
+	base, err := c.buildURL(server)
+	if err != nil {
+		return keamodels.Response{}, true, fmt.Errorf("failed to build URL for %s: %w", server, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/", bytes.NewReader(body))
+	if err != nil {
+		return keamodels.Response{}, true, fmt.Errorf("failed to create request for %s: %w", base, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.BasicAuthUsername != "" && c.ClientCertPath == "" && len(c.ClientCertPEM) == 0 {
+		req.SetBasicAuth(c.BasicAuthUsername, c.BasicAuthPassword)
+	}
+
+	// #nosec G704 -- URL is validated via buildURL() using url.Parse
+	resp, err := c.HttpClient.Do(req)
+	if err != nil {
+		return keamodels.Response{}, ctx.Err() == nil, fmt.Errorf("request failed for %s: %w", base, err)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if cerr := resp.Body.Close(); cerr != nil {
+		vlog.Errorf("failed to close response body: %v", cerr)
+	}
+	if err != nil {
+		return keamodels.Response{}, ctx.Err() == nil, fmt.Errorf("failed to read response from %s: %w", base, err)
+	}
+
+	// Kea returns command outcomes, failures included, in the body of an
+	// HTTP 200. Any other status comes from auth, a proxy or a broken
+	// server, so its body must not be read as a command result.
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return keamodels.Response{}, isUnavailableStatus(resp.StatusCode),
+			fmt.Errorf("kea server %s returned HTTP %d: %s", base, resp.StatusCode, snippet(data))
+	}
+
+	parsed, err := c.parseResponse(data)
+	return parsed, false, err
+}
+
+// isUnavailableStatus reports an HTTP status that says the server, or the
+// proxy in front of it, can't serve right now, as opposed to an answer about
+// the request itself.
+func isUnavailableStatus(code int) bool {
+	return code == http.StatusBadGateway || code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
+}
+
+// retryDelay is the wait before retry attempt+1: RetryBackoff doubled per
+// attempt, plus up to 25% jitter so concurrent reconciles don't retry in
+// lockstep, capped at RetryMaxBackoff.
+func (c *keaClient) retryDelay(attempt int) time.Duration {
+	d := c.RetryBackoff
+	for range attempt {
+		if d >= c.RetryMaxBackoff || d > math.MaxInt64/2 {
+			break
+		}
+		d *= 2
+	}
+	if d > 0 {
+		d += rand.N(d/4 + 1) // #nosec G404 -- jitter, not security
+	}
+	return min(d, c.RetryMaxBackoff)
+}
+
+// sleepCtx waits for d and reports false if ctx ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// primaryCoolingDown reports whether a recent failover means the primary is
+// skipped for now.
+func (c *keaClient) primaryCoolingDown() bool {
+	until := c.primaryDownUntil.Load()
+	return until != 0 && time.Now().UnixNano() < until
+}
+
+// markPrimaryDown starts a cooldown after the primary used up its retries.
+func (c *keaClient) markPrimaryDown(err error) {
+	vlog.Warnf("KEA primary %s did not answer after %d attempts, failing over to backups (primary skipped for %s): %v",
+		c.BaseUrl, c.PrimaryRetries+1, c.PrimaryCooldown, err)
+	if c.PrimaryCooldown > 0 {
+		c.primaryDownUntil.Store(time.Now().Add(c.PrimaryCooldown).UnixNano())
+	}
+}
+
+// markPrimaryUp ends a cooldown once the primary answers again.
+func (c *keaClient) markPrimaryUp() {
+	if c.primaryDownUntil.Load() != 0 && c.primaryDownUntil.Swap(0) != 0 {
+		vlog.Infof("KEA primary %s is answering again", c.BaseUrl)
+	}
 }
 
 // parseResponse decodes a Kea command response. Kea answers with an array
@@ -398,7 +565,8 @@ func (c *keaClient) loadClientCertWithFallback() *tls.Certificate {
 // Supported env vars:
 //
 //	KEA_URL (full URL with scheme, e.g. https://host:port) or KEA_BASE_URL + optional KEA_PORT
-//	KEA_SECONDARY_URL (optional, for HA failover)
+//	KEA_SECONDARY_URLS / KEA_SECONDARY_URL (optional backups for HA failover)
+//	KEA_PRIMARY_RETRIES, KEA_RETRY_BACKOFF, KEA_RETRY_MAX_BACKOFF, KEA_PRIMARY_COOLDOWN
 //	KEA_TLS_CA_FILE, KEA_TLS_CERT_FILE, KEA_TLS_KEY_FILE
 //	KEA_TLS_INSECURE (true/false)
 //	KEA_TLS_SERVER_NAME

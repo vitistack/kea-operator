@@ -102,11 +102,16 @@ helm uninstall vitistack-kea-operator --namespace vitistack
 
 | Parameter                  | Description                            | Default                                 |
 | -------------------------- | -------------------------------------- | --------------------------------------- |
-| `kea.url`                  | Primary KEA server URL                 | `""`                                    |
-| `kea.secondaryUrl`         | Secondary KEA server URL (HA failover) | `""`                                    |
+| `kea.url`                  | Primary KEA server URL; backups are only used once it has kept failing | `""`    |
+| `kea.secondaryUrls`        | Backup KEA server URLs, asked in order once the primary gives up | `[]`          |
+| `kea.secondaryUrl`         | Single backup URL (still supported; tried before `secondaryUrls`) | `""`         |
 | `kea.port`                 | KEA server port                        | `"8000"`                                |
-| `kea.timeoutSeconds`       | Whole API request timeout              | `"60"`                                  |
-| `kea.connectTimeoutSeconds` | Connect + TLS handshake timeout (fast failover) | `"10"`                         |
+| `kea.timeoutSeconds`       | Timeout of one API request attempt     | `"60"`                                  |
+| `kea.connectTimeoutSeconds` | Connect + TLS handshake timeout of one attempt | `"10"`                          |
+| `kea.primaryRetries`       | Retries on the primary for timeouts, connection errors and HTTP 502/503/504; `0` fails over at once | `"3"` |
+| `kea.retryBackoff`         | Wait before the first retry, doubling per retry (Go duration) | `"1s"`            |
+| `kea.retryMaxBackoff`      | Longest wait between retries           | `"10s"`                                 |
+| `kea.primaryCooldown`      | How long requests skip the primary after a failover; `"0s"` always tries it first | `"30s"` |
 | `kea.disableKeepalives`    | Disable HTTP keep-alive                | `"true"`                                |
 | `kea.requireClientClasses` | Required client classes for pools      | `"biosclients,ueficlients,ipxeclients"` |
 | `kea.pinReservations`      | Pin MAC-only reservations to the lease IP: `off`, `log`, `enforce` | `"log"`     |
@@ -191,7 +196,8 @@ image:
 
 kea:
   url: "https://kea-dhcp.vitistack.svc.cluster.local:8000"
-  secondaryUrl: "https://kea-dhcp-secondary.vitistack.svc.cluster.local:8000"
+  secondaryUrls:
+    - "https://kea-dhcp-secondary.vitistack.svc.cluster.local:8000"
   timeoutSeconds: "30"
 
   auth:

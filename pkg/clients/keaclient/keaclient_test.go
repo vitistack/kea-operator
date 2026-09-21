@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
-
-	"github.com/vitistack/kea-operator/pkg/models/keamodels"
 )
 
 // Bodies that parse as JSON but carry no Kea "result" must not be reported as
@@ -84,8 +82,8 @@ func TestSend_NonSuccessHTTPStatusIsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewKeaClientWithOptions(OptionURL(srv.URL))
-	if _, err := c.Send(context.Background(), keamodels.Request{Command: "version-get"}); err == nil {
+	c := NewKeaClientWithOptions(append(fastRetries(1), OptionURL(srv.URL))...)
+	if _, err := c.Send(context.Background(), versionGet()); err == nil {
 		t.Fatal("expected an error for HTTP 503, got nil")
 	}
 }
@@ -104,12 +102,12 @@ func TestSend_ConcurrentFailoverKeepsPrimary(t *testing.T) {
 	}))
 	defer secondary.Close()
 
-	c := NewKeaClientWithOptions(OptionURL(primary), OptionSecondaryURL(secondary.URL))
+	c := NewKeaClientWithOptions(append(fastRetries(3), OptionURL(primary), OptionSecondaryURL(secondary.URL))...)
 
 	var wg sync.WaitGroup
 	for range 32 {
 		wg.Go(func() {
-			resp, err := c.Send(context.Background(), keamodels.Request{Command: "version-get"})
+			resp, err := c.Send(context.Background(), versionGet())
 			if err != nil || resp.Result != 0 {
 				t.Errorf("expected failover success, got resp=%+v err=%v", resp, err)
 			}

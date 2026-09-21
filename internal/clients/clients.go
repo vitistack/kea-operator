@@ -21,7 +21,8 @@ var (
 // It prefers environment variables (see internal/consts/consts.go) and
 // falls back to in-cluster defaults if none are provided.
 // Supports:
-//   - HA: KEA_URL (primary) + KEA_SECONDARY_URL (optional)
+//   - HA: KEA_URL (primary, retried per KEA_PRIMARY_RETRIES) + backups in
+//     KEA_SECONDARY_URLS / KEA_SECONDARY_URL (optional)
 //   - TLS (file or secret based)
 //   - Basic Auth via KEA_BASIC_AUTH_USERNAME / KEA_BASIC_AUTH_PASSWORD (ignored if client certs provided)
 func InitializeClients() {
@@ -29,6 +30,7 @@ func InitializeClients() {
 	viper.AutomaticEnv()
 	_ = viper.BindEnv(consts.KEA_URL)
 	_ = viper.BindEnv(consts.KEA_SECONDARY_URL)
+	_ = viper.BindEnv(consts.KEA_SECONDARY_URLS)
 	_ = viper.BindEnv(consts.KEA_PORT)
 	_ = viper.BindEnv(consts.KEA_TLS_SECRET_NAME)
 	_ = viper.BindEnv(consts.KEA_TLS_SECRET_NAMESPACE)

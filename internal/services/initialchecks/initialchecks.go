@@ -54,31 +54,42 @@ func checkKea() bool {
 		return true
 	}
 
-	// Retry a few times to tolerate slow startup/order
+	vlog.Info("checking connectivity to Kea ", "url ", nonEmpty(full, base))
+	if err := waitForKea(); err != nil {
+		vlog.Error("failed to connect to Kea after retries", err)
+		os.Exit(1)
+		return false
+	}
+	vlog.Info("kea connectivity OK")
+	return true
+}
+
+// waitForKea pings Kea until it answers, retrying a few times to tolerate
+// slow startup/order. It returns the last error if Kea never answers.
+func waitForKea() error {
+	// perTryTimeout must outlast the client's own primary retries (about 9s
+	// with the defaults) so a refused primary still reaches a backup, while
+	// the check as a whole ends before the liveness probe gives up (~55s):
+	// probes only answer once the manager starts, after this check.
 	const (
 		maxRetries    = 5
-		perTryTimeout = 5 * time.Second
+		perTryTimeout = 30 * time.Second
 		backoff       = 2 * time.Second
 	)
 
-	vlog.Info("checking connectivity to Kea ", "url ", nonEmpty(full, base))
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		ctx, cancel := context.WithTimeout(context.TODO(), perTryTimeout)
 		err := pingKea(ctx)
 		cancel()
 		if err == nil {
-			vlog.Info("kea connectivity OK")
-			return true
+			return nil
 		}
 		lastErr = err
 		vlog.Warn("kea connectivity attempt failed ", " attempt: ", attempt, " error: ", err)
 		time.Sleep(backoff)
 	}
-
-	vlog.Error("failed to connect to Kea after retries", lastErr)
-	os.Exit(1)
-	return false
+	return lastErr
 }
 
 // pingKea sends a minimal command to verify reachability. We use 'list-commands' which is widely supported.

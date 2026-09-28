@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/go-logr/logr v1.4.4
 	github.com/onsi/ginkgo/v2 v2.33.0
-	github.com/onsi/gomega v1.41.0
+	github.com/onsi/gomega v1.44.0
 	github.com/spf13/viper v1.21.0
 	github.com/vitistack/common v0.8.71
 	k8s.io/api v0.37.0
